@@ -1,0 +1,79 @@
+#!/bin/tcsh 
+set path = ($path /opt/bin /usr/local/sbin /usr/sbin /sbin /usr/local/bin /usr/bin /bin /usr/X11R6/bin /opt/www/htdig/bin /opt/kde/bin /usr/lib/qt-3.0.4/bin /usr/share/texmf/bin /home/frednet/bin/DumpGPS .)
+set JOB=`basename $0`
+set CONFIG_FILE="$HOME/.netrc"
+set USAGE = `echo "USAGE:"`
+set USAGE = "$USAGE""\n""`basename $0` -m [machine] | -u [user] | -p [port] | -rd [remote dir path] | -f [filenames (within pathname)]"
+set USAGE = "$USAGE""\n""[funziona con chiave pubblica impostata sul server remoto]"
+set ErrorUsage = ""
+
+if(! $#) then
+	echo "$USAGE"
+	exit 1
+endif
+
+set ReadFiles = "No"
+
+while($#)
+	switch($1)
+		case "-m":
+			shift
+			set REMOTE_MACHINE = $1
+			set PING_RESPONSE = `ping -c 1 $REMOTE_MACHINE`
+			set PING_RESPONSE = `echo $PING_RESPONSE | gawk ' $0 ~/0%/ {print "Ready"}'`
+			if ("$PING_RESPONSE" == "Ready") then
+				set ReadFiles = "No"
+			else
+			   set ErrorUsage = "$ErrorUsage""Error -> $REMOTE_MACHINE isn't a correct machine name or the link isn't up.\c"
+			   exit
+			endif
+			breaksw
+		case "-u":
+			shift
+			set REMOTE_USER = $1
+			set ReadFiles = "No"
+			breaksw
+		case "-p":
+		     shift
+			 set REMOTE_PORT = "$1"
+			 set ReadFiles = "No"
+			 breaksw
+		case "-rd":
+		     shift
+			 set REMOTE_DIR = "$1"
+			 if (`echo $1 | gawk '$1 != "-m" &&  $1 != "-u" && $1 != "-p" && $1 != "-f" && $1 != "-u" && $1 != "-rd" && $1 != "" {print $1}'` != "") then
+			 set ReadFiles = "No"
+			 else
+			    set ErrorUsage = "$ErrorUsage""Error -> line options are not good.\c"
+			 endif
+			 breaksw
+		case "-f":
+		     shift
+			 set FILES = "$1"
+			 set ReadFiles = "Yes"
+			 breaksw
+		default:
+		     if ("$ReadFiles" == "Yes") then
+			    set FILES = "$FILES $1"
+			 else
+			    set ErrorUsage = "$ErrorUsage""Error -> line options are not good.\c"
+			 endif
+	         breaksw
+	endsw
+	shift
+end
+
+
+if ("$ErrorUsage" != "") then
+   echo "$ErrorUsage"
+   echo ""
+   exit
+endif
+
+foreach FILE ($FILES)
+sftp -P $REMOTE_PORT $REMOTE_USER@$REMOTE_MACHINE <<**
+cd $REMOTE_DIR
+put $FILE
+bye
+**
+end

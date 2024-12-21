@@ -1,0 +1,119 @@
+#!/bin/tcsh -xf
+
+# create by PFabris(October 2007)
+
+#******************** Definizione delle directory principali ********************
+
+set ARCHIVEDIR  = /data/frednet/FTP_Data
+#set ARCHIVEDIRTEST  = /home/frednet/WorkPaolo/LABORATORIO/ARCHIVE
+set STATIONSDIR = stations
+
+#******************** Definizione delle variabili secondarie ********************
+set ARCHIVETYPE = "raw rinex rinex_1s"
+#set ARCHIVETYPE = "rinex_1s"
+set HOURS = ""
+set FILES = ""
+#******************** Come usare lo script ********************
+set USAGE = "\n"
+set USAGE = "$USAGE""USAGE:"
+set USAGE = "$USAGE""\n""`basename $0` --[OPTIONS]"
+set USAGE = "$USAGE""\n"
+set USAGE = "$USAGE""\n""The script links for each station all type files ($ARCHIVETYPE)"
+set USAGE = "$USAGE""\n""to the station directory in the FTP_Data folder"
+set USAGE = "$USAGE""\n"
+set USAGE = "$USAGE""\n""[OPTIONS]:"
+set USAGE = "$USAGE""\n"
+set USAGE = "$USAGE""\n""--all:       with this options, the script will link all"
+set USAGE = "$USAGE""\n""             days in FTP_Data folder."
+set USAGE = "$USAGE""\n"
+set USAGE = "$USAGE""\n""--yesterday: with this options, the script will link only"
+set USAGE = "$USAGE""\n""             yesterday."
+set USAGE = "$USAGE""\n"
+
+
+if(! $#) then
+	 set LASTDAY = "NO"
+	 echo "$USAGE"
+	 exit
+endif
+
+#*********Lettura dei parametri a linea di comando*********
+while($#)
+	switch($1)
+		case "--yesterday":			
+			set YESTERDAY = "YES"
+			#set YEARS = `date --date="1 day ago" +%Y`
+			set 
+                breaksw
+		case "--all":			
+			set YESTERDAY = "NO"
+                breaksw		
+        endsw
+shift
+end
+
+
+
+#echo "$LASTDAY"
+
+foreach TYPE($ARCHIVETYPE)
+        if ("$YESTERDAY" == "NO") then
+           set YEARS = `ls $ARCHIVEDIR/$TYPE/ `
+	   set YEARS = (2023)
+	else
+	   set YEARS = `date --date="1 day ago" +%Y `
+	endif
+	foreach YEAR($YEARS)
+	        if ("$YESTERDAY" == "NO") then
+	            set DOYS = `ls $ARCHIVEDIR/$TYPE/$YEAR/ `
+		else
+	            set DOYS = `date --date="1 day ago" +%j `
+	        endif    
+		foreach DOY($DOYS)
+		        set OBJECTS = `ls $ARCHIVEDIR/$TYPE/$YEAR/$DOY `
+		        foreach OBJECT($OBJECTS)
+		                if ( -d $ARCHIVEDIR/$TYPE/$YEAR/$DOY/$OBJECT) then #è una cartella
+			           set HOURS = "$OBJECT"
+			        else #e un file
+			           set FILES = "$OBJECT"
+			        endif	
+			        foreach FILE($FILES)
+				        if ($TYPE == "raw") then
+					    set SITE = `echo $FILE | gawk '{{print toupper(substr($1,2,4))}}'`
+                                        else
+					    set SITE = `echo $FILE | gawk '{{print toupper(substr($1,1,4))}}'`
+					endif
+				        	mkdir -p $ARCHIVEDIR/$STATIONSDIR/$SITE/$TYPE/$YEAR/$DOY/
+						cd $ARCHIVEDIR/$STATIONSDIR/$SITE/$TYPE/$YEAR/$DOY/
+				        	ln -s ../../../../../$TYPE/$YEAR/$DOY/$FILE $ARCHIVEDIR/$STATIONSDIR/$SITE/$TYPE/$YEAR/$DOY/$FILE
+				end
+				set FILES = ""	
+				if ($TYPE != "raw") then
+				   foreach HOUR($HOURS)
+				           set FILES = `ls $ARCHIVEDIR/$TYPE/$YEAR/$DOY/$HOUR `
+				           foreach FILE($FILES)
+				                   set SITE = `echo $FILE | gawk '{{print toupper(substr($1,1,4))}}'`
+						   	mkdir -p $ARCHIVEDIR/$STATIONSDIR/$SITE/$TYPE/$YEAR/$DOY/
+						   	cd $ARCHIVEDIR/$STATIONSDIR/$SITE/$TYPE/$YEAR/$DOY/
+				                   	ln -s ../../../../../$TYPE/$YEAR/$DOY/$HOUR/$FILE $ARCHIVEDIR/$STATIONSDIR/$SITE/$TYPE/$YEAR/$DOY/$FILE
+					   end
+       			           end
+				   set FILES = ""  #05/10/2007	
+				endif
+				if ($TYPE == "raw") then
+			           foreach HOUR($HOURS)
+				           set FILES = `ls $ARCHIVEDIR/$TYPE/$YEAR/$DOY/$HOUR `
+				           foreach FILE($FILES)
+				                   set SITE = `echo $FILE | gawk '{{print toupper(substr($1,2,4))}}'`
+						   	mkdir -p $ARCHIVEDIR/$STATIONSDIR/$SITE/$TYPE/$YEAR/$DOY/
+						   	cd $ARCHIVEDIR/$STATIONSDIR/$SITE/$TYPE/$YEAR/$DOY/
+				                   	ln -s ../../../../../$TYPE/$YEAR/$DOY/$HOUR/$FILE $ARCHIVEDIR/$STATIONSDIR/$SITE/$TYPE/$YEAR/$DOY/$FILE
+					end
+       			           end
+				   set FILES = ""  #05/10/2007
+				endif
+				set HOURS = ""		  
+		        end
+	        end
+        end
+end

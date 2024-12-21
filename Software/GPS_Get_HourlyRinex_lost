@@ -1,0 +1,380 @@
+#!/bin/tcsh
+# create by DZ (April 2003)
+# modified by PF (March 2006)
+#******************** Definizione delle variabili principali ********************
+set path = ($path /opt/bin /usr/local/sbin /usr/sbin /sbin /usr/local/bin /usr/bin /bin /usr/X11R6/bin /opt/www/htdig/bin /opt/kde/bin \
+				  /usr/lib/qt-3.0.4/bin /usr/share/texmf/bin /home/frednet/bin .)
+set JOB = `basename $0`
+
+# start Time of the JOB
+set StarTime = `date +%s`
+echo
+echo
+echo '++++++++++++++++++++++++++++++'
+date
+set DataType = "Hourly" # Modificato # Modificato per Hourly
+set FileType = 'U'
+set ActualUser = "$user"
+set InitArg = "$argv[*]"
+set YearLong = `date +%Y | gawk '{print substr($0,length($0)-3,length($0))}'`
+set TODAY = `date +%j`
+set DateNow = `date`
+set HOURNOW = `date -d"$DateNow" +%H`
+# set HOURNOW = `date --date='1 hour ago' +%H`
+if ($HOURNOW == 00) then
+   set SPANTIME = 1
+   set HOURNOW = 24
+else
+   set SPANTIME = 0
+endif
+set HOURNOW_Year = `date -d$SPANTIME' hour ago' +%Y | gawk '{print substr($0,length($0)-1,length($0))}'`
+set HOURNOW_YearLong = `date -d$SPANTIME' hour ago' +%Y | gawk '{print substr($0,length($0)-3,length($0))}'`
+set HOURNOW_DOY = `date -d$SPANTIME' hour ago' +%j`
+
+
+#******************** directories ********************
+set DumpDir = '/data'
+set LogDir  = 'WORKDIR/LOGS'
+set DwnlDir = 'WORKDIR/mkrinex'
+#set DwnlDir = 'mkrinex'
+#set LogDir  = 'log'
+set ScptDir = 'scripts'
+set LogDir  = "$DumpDir/$ActualUser/$LogDir"
+set LogScriptsDir = "$LogDir/$ScptDir/$YearLong/$TODAY"
+set DumpDir = "$DumpDir/$ActualUser/$DwnlDir"
+set LocalSitesList=`ls -l $DumpDir | gawk '$1 ~/d/ && length($NF)==4 && $NF==toupper($NF) {print $NF}'`
+
+#******************** il file di log ********************
+set LogFileName = `date | gawk '{print "'"$JOB"'_" $1 "_" $2 "_" $3 "_" $4 "_" $5 ".log"}'`
+if ( ! -e $LogScriptsDir/$LogFileName ) then
+   mkdir -p $LogScriptsDir
+   touch $LogScriptsDir/$LogFileName
+endif
+
+#******************** Come usare lo script ********************
+set USAGE = "\n"
+set USAGE = "$USAGE""USAGE:"
+set USAGE = "$USAGE""\n""`basename $0` -h [Hours] -s [Sites list] | -m [Recp. list] | -at [alive time] | -noupld | -foupld | -tp | -unpub"
+set USAGE = "$USAGE""\n"
+set USAGE = "$USAGE""\n""-h [Hours list] : number of past hours to recover. (default value is 1)."
+set USAGE = "$USAGE""\n""-s [Sites list] : list of sites taken in account (no defaults defined)."
+set USAGE = "$USAGE""\n""                  Allowed values are name composed by capital letters and"
+set USAGE = "$USAGE""\n""                  numbers. The size of the names must be 4 letters long."
+set USAGE = "$USAGE""\n""-m [Recp. list] : it sends, by e-mail, the $JOB log file"
+set USAGE = "$USAGE""\n""                  to the recipients in the list, without this option"
+set USAGE = "$USAGE""\n""                  $JOB doesn'tsend e-mails."
+set USAGE = "$USAGE""\n""-at [alive time]: allowed alive time in seconds for $JOB, default is 600."
+set USAGE = "$USAGE""\n""-noupld         : do not send data to anyone (on the contrary data will be"
+set USAGE = "$USAGE""\n""                  uploaded using ftp)."
+set USAGE = "$USAGE""\n""-foupld         : force ftp uploads. By defaults $JOB uploads data only the"
+set USAGE = "$USAGE""\n""                  first time after a downloading session from a GPS receiver."
+set USAGE = "$USAGE""\n""-tp             : trasparent mode for handling data already downloaded."
+set USAGE = "$USAGE""\n""                  This mode doesn't support data downloading."
+set USAGE = "$USAGE""\n""-red            : reducing file mode. This is used to set the Topcon GB-1000"     #DZ for the reducing file mode from line command
+set USAGE = "$USAGE""\n""                  to produce small data files By default no reducing mode is used"
+set USAGE = "$USAGE""\n""-unpub          : unpub  mode. Option to get data from stations whose RINEX"
+set USAGE = "$USAGE""\n""                  and RAW files must be saved in the UNPUB directory."
+set USAGE = "$USAGE""\n"
+
+
+if(! $#) then
+	echo "$USAGE"
+	exit 1
+endif
+
+
+#********************  Valori di default delle variabili di abilitazione scripts ********************
+set FTPOk = "Yes" # attenzione questa opzione � modificato da linea di comando usando il parametro -noupld
+set FTPFO = "No" # attenzione questa opzione � modificato da linea di comando usando il parametro -foupld
+set Unpub = ""
+set ErrorUsage = ""
+set ReadSites = "No"
+set ReadDOYs = "No"
+set ReadHours = "No"
+set ReadMails = "No"
+set ReadAliveTime = "No"
+set TPMode = "No"
+set REDMode = "No"	#DZ for the reducing file mode from line command
+set InitArg = "$argv[*]"
+set CommandLineHours = ""
+set CommandLineSites = ""
+set CommandLineAliveTime = ""
+set CommandLineMails = ""
+set CommandLineOther = ""
+
+while($#)
+        switch($1)
+		case "-h":
+			shift
+			set CommandLineHours = $1
+			if (`echo "$1" | gawk '$0 ~/[0-9]+/ {print $0}' | gawk '{if ($0 ~/[^0-9+]/); else print $0}' | gawk '($0 >= 0)'` != "") then
+			   set ReadHours = "Yes"
+			   set ReadSites = "No"
+		           set ReadMails = "No"
+                           set ReadAliveTime = "No"
+			else
+			   set ErrorUsage = "$ErrorUsage""Error -> $1 isn't a correct hour of the day.\c"
+			endif
+			breaksw
+		case "-s":
+			shift
+			set CommandLineSites = "$1"
+			if (`echo $1 | gawk 'length($NF)==4 && $NF==toupper($NF) {print $NF}'` != "") then
+			   set ReadSites = "Yes"
+			   set ReadHours = "No"
+		           set ReadMails = "No"
+                           set ReadAliveTime = "No"
+			else
+			   set ErrorUsage = "$ErrorUsage""Error -> Sites list: [$CommandLineSites] isn't correct.\c"
+			endif
+			breaksw
+		case "-at":
+			shift
+			set CommandLineAliveTime = "$1"
+			if (`echo "$1" | gawk '$0 ~/[0-9]+/ {print $0}' | gawk '{if ($0 ~/[^0-9+]/); else print $0}' | gawk '($0 >= 0)'` != "") then
+                           set ReadAliveTime = "Yes"
+			   set ReadSites = "No"
+			   set ReadHours = "No"
+		           set ReadMails = "No"
+			else
+			   set ErrorUsage = "$ErrorUsage""Error -> Alive Time: [$CommandLineSites] isn't correct.\c"
+			endif
+			breaksw
+		case "-m":
+		        shift
+		        set CommandLineMails = "$1"
+		        if (`echo $1 | gawk ' /@/ {print $NF}'` != "") then
+		           set ReadMails = "Yes"
+			   set ReadHours = "No"
+			   set ReadSites = "No"
+                           set ReadAliveTime = "No"
+		        else
+			   set ErrorUsage = "$ErrorUsage""Error -> Mail recipients list: [$CommandLineMails] isn't correct.\c"
+		        endif
+		        breaksw
+		case "-noupld"
+		     #set FTPOk = "No"
+                     set CommandLineOther = "$CommandLineOther -noupld"
+		     breaksw
+		case "-foupld"
+		     # set FTPFO = "Yes"
+                     set CommandLineOther = "$CommandLineOther -foupld"
+		     breaksw
+		case "-tp"
+		     #set TPMode = "Yes"
+                     set CommandLineOther = "$CommandLineOther -tp"
+		     breaksw
+		case "-red"
+		     set REDMode = "Yes" #DZ for the reducing file mode from line command
+		     breaksw
+                case "-unpub"
+                     set Unpub = "-unpub"
+                     set CommandLineOther = "$CommandLineOther -unpub"
+                     breaksw
+		default:
+		     if ("$ReadSites" == "Yes") then
+			set CommandLineSites = "$CommandLineSites $1"
+			if ("$ReadMails" == "Yes" | "$ReadAliveTime" == "Yes" | "$ReadHours" == "Yes") then
+			   set ErrorUsage = "$ErrorUsage""Error -> Generic error, parameters: $InitArg not valid. \c"
+			   breaksw
+			else
+                           if (`echo $1 | gawk 'length($NF)==4 && $NF==toupper($NF) {print $NF}'` != "") then
+			   else
+			      set ErrorUsage = "$ErrorUsage""Error -> Sites list: [$CommandLineSites] isn't correct.\c"
+			   endif
+			   breaksw
+			endif
+		     else
+		     endif
+		     if ("$ReadMails" == "Yes") then
+			set CommandLineMails = "$CommandLineMails $1"
+			if ("$ReadSites" == "Yes" | "$ReadAliveTime" == "Yes" | "$ReadHours" == "Yes") then
+			   set ErrorUsage = "$ErrorUsage""Error -> Generic error, parameters: $InitArg not valid. \c"
+			   breaksw
+			else
+			   if (`echo $1 | gawk ' /@/ {print $NF}'` != "") then
+			   else
+			      set ErrorUsage = "$ErrorUsage""Error -> Mail recipients list: [$CommandLineMails] isn't correct.\c"
+			   endif
+			   breaksw
+			endif
+		     else
+		     endif
+		     if ("$ReadAliveTime" == "Yes") then
+			set CommandLineMails = "$CommandLineMails $1"
+			if ("$ReadSites" == "Yes" | "$ReadMails" == "Yes" | "$ReadHours" == "Yes") then
+			   set ErrorUsage = "$ErrorUsage""Error -> Generic error, parameters: $InitArg not valid. \c"
+			   breaksw
+			else
+			   if (`echo $1 | gawk ' /@/ {print $NF}'` != "") then
+			   else
+			      set ErrorUsage = "$ErrorUsage""Error -> Mail recipients list: [$CommandLineMails] isn't correct.\c"
+			   endif
+			   breaksw
+			endif
+		     else
+		     endif
+		     if ("$ReadHours" == "Yes") then
+			set CommandLineHours = "$CommandLineHours $1"
+			if ("$ReadSites" == "Yes" | "$ReadMails" == "Yes" | "$ReadAliveTime" == "Yes") then
+			   set ErrorUsage = "$ErrorUsage""Error -> Generic error, parameters: $InitArg not valid. \c"
+			   breaksw
+			else
+			   if (`echo "$1" | gawk '$0 ~/[0-9]+/ {print $0}' | gawk '{if ($0 ~/[^0-9+]/); else print $0}' | gawk '($0 >= 1) && ($0 <=24)'` != "") then
+			   else
+			      set ErrorUsage = "$ErrorUsage""Error -> Hours list: [$CommandLineHours] isn't correct.\c"
+			   endif
+			   breaksw
+			endif
+		     else
+		     endif
+	             breaksw
+	endsw
+	shift
+end
+
+
+if ("$ErrorUsage" != "") then
+    echo "Uncorrect command: `basename $0` $InitArg"
+    echo "$ErrorUsage"
+    echo ""
+    echo "$USAGE"
+    exit 1
+else
+    if ("$CommandLineHours" == "") then
+	 set ActualHoursList = 1
+    else
+	set ActualHoursList = "$CommandLineHours"
+    endif
+    if ("$CommandLineSites" == "") then
+       set ActualSitesList = "$LocalSitesList"
+    else
+       set ActualSitesList = "$CommandLineSites"
+    endif
+    #if ("$CommandLineMails" == "") then
+    #
+    #else
+    set ActualMailsList = "$CommandLineMails"
+    #endif
+    if ("$CommandLineAliveTime" == "") then
+       set ActualAliveTime = 6000 #PF
+    else
+       set ActualAliveTime = "$CommandLineAliveTime"
+    endif
+    foreach CommandLineSite ($CommandLineSites)
+        if (`echo "$LocalSitesList" | gawk '{for (i=1; i <= NF; i++) if ($i == "'"$CommandLineSite"'") print $i;}'` == "") then
+	   echo
+           echo "Error -> The Command line Sites list: $CommandLineSites doesn't match the local Sites list: $LocalSitesList."
+           exit 1
+	else
+	   set ActualSitesList = "$CommandLineSites"
+	endif
+    end
+    if ("$Unpub" == "unpub") then
+        #set DumpDir = '/data'
+        set RnxDir  = 'WORKDIR/UNPUB/rinex'
+        set RwDir   = 'WORKDIR/UNPUB/raw'
+        set RawDir   = "$DumpDir/$ActualUser/$RwDir"
+        set RinexDir = "$DumpDir/$ActualUser/$RnxDir"
+        #set DumpDir = "$DumpDir/$ActualUser/$DwnlDir"
+    endif
+endif
+
+set NumOfHours = $ActualHoursList[1]
+
+foreach Site ($ActualSitesList)
+
+    # Hours for the hour downloading sequence
+    set HOURNOW = `date -d"$DateNow" +%H`
+    set Start_Hour  = `date -d"$DateNow $NumOfHours hour ago" +%H`
+
+    # time for the header of the PID control log
+    set now=`date +"%Y-%m-%d %H-%M-%S" `
+
+    # PID control
+    if (! -e $HOME/var/run/) then
+       mkdir -p $HOME/var/run/
+       echo "$JOB : $now : $HOME/var/run/ created." >> "$LogScriptsDir/$LogFileName"
+    else
+       echo "$JOB : $now : $HOME/var/run/ already exist." >> "$LogScriptsDir/$LogFileName"
+    endif
+    set PID=$HOME/var/run/$JOB.$Site.pid
+
+    # check if the same script is already running
+    # for the same site and kill it if necessary
+    if (-e $PID) then
+       if (-s $PID) then
+          set KILLFAILED="OK"
+          set PIDFATHER = `cat $PID`
+          # se il pid sul file e quello attuale sono uguali lascia perdere
+          # altrimenti elimina il processo con il PID equivalente a quello
+          # trovato nel file
+          if  (`ps -a | gawk -v pid_file=$PIDFATHER -v pid_main=$$ '{if ($1==pid_file && pid_main!=pid_file) print $0}' | wc -l`) then
+              echo "$JOB - killing previous" >> "$LogScriptsDir/$LogFileName"
+              kill_family $PIDFATHER >> "$LogScriptsDir/$LogFileName"
+          else
+             echo "$JOB : $now : no other JOBS active with pid number: $$." >> "$LogScriptsDir/$LogFileName"
+          endif
+       endif
+    endif
+    echo "$$" > $PID
+    cat $PID
+    while ($NumOfHours > 0)
+        # for controlling the alive time of the JOB
+        set NowTime = `date +%s`
+        @ RemainingTime = $NowTime - $StarTime
+
+        # exit for exceeded alive time of the JOB
+        if ($RemainingTime >= $ActualAliveTime) then
+           echo "$JOB : $now : Job time out exceeded EXITING." >> "$LogScriptsDir/$LogFileName"
+           rm -f $PID
+           exit 4
+        endif
+
+        if ($Start_Hour == 00) then
+           set Start_Hour = 24
+           @ ActualNumOfHours = $NumOfHours + 1
+        else
+           set ActualNumOfHours = $NumOfHours
+        endif
+        set Start_DOY   = `date -d"$DateNow $ActualNumOfHours hour ago" +%j`
+        set Start_Year  = `date -d"$DateNow $ActualNumOfHours hour ago" +%Y`
+        echo "Start hour: $Start_Hour"
+        if ($NumOfHours >= 24) then
+           set ListHours = `echo | gawk '{for (i = '"$Start_Hour"'; i <= 24 ; i++) print i}'`
+           @ DeltaTime = 24 - $Start_Hour - 1
+        else
+           if ($Start_Hour >= $HOURNOW) then
+              set ListHours = `echo | gawk '{for (i = '"$Start_Hour"'; i <= 24 ; i++) print i}'`
+              @ DeltaTime = 24 - $Start_Hour - 1
+           else
+              set ListHours = `echo | gawk '{for (i = '"$Start_Hour"'; i <= '"$HOURNOW"' ; i++) print i}'`
+              @ DeltaTime = $HOURNOW - $Start_Hour
+           endif
+        endif
+        @ AtTime = $ActualAliveTime - $RemainingTime[1]
+        echo "Remaining	Time: --> $RemainingTime[1] s"
+        echo "Alive	Time_ --> $AtTime s"
+        echo ""
+        if ($AtTime >= 0) then
+        else
+           set AtTime = 0
+        endif
+	if ($REDMode == "Yes") then
+           if ($ActualMailsList != "") then
+              GPS_Dump_HourlyRaw -s $Site -d $Start_DOY -y $Start_Year -h $ListHours -at $AtTime -m $ActualMailsList $CommandLineOther -red   #PF
+           else
+              GPS_Dump_HourlyRaw -s $Site -d $Start_DOY -y $Start_Year -h $ListHours -at $AtTime $CommandLineOther -red            #PF
+           endif
+	else
+           if ($ActualMailsList != "") then
+              GPS_Dump_HourlyRaw -s $Site -d $Start_DOY -y $Start_Year -h $ListHours -at $AtTime -m $ActualMailsList $CommandLineOther  #PF
+           else
+              GPS_Dump_HourlyRaw -s $Site -d $Start_DOY -y $Start_Year -h $ListHours -at $AtTime $CommandLineOther               #PF
+           endif
+	endif
+        @ NumOfHours = $NumOfHours - $DeltaTime
+        set Start_Hour = 1
+    end
+    rm -f $PID
+end

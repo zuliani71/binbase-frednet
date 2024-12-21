@@ -1,0 +1,530 @@
+#!/bin/tcsh 
+# create by PFabris (March 2007)
+# modified by DZuliani (december 2013)
+# modified by DZuliani (september 2021)
+
+set JOB = `basename $0`
+set PID = $$
+set LOCALDIR = `dirname $0`
+
+set USAGE = "\n"
+set USAGE = "$USAGE""USAGE:"
+set USAGE = "$USAGE""\n""`basename $0`  --configfile | --fatfile | --terminal  "
+set USAGE = "$USAGE""\n"
+set USAGE = "$USAGE""\n""--configfile ; : config file: "
+set USAGE = "$USAGE""\n""                             - tdump.cfg: from GPS_DumpHourlyRaw or "
+set USAGE = "$USAGE""\n""                                          from GPS_DumpDailyRaw."
+set USAGE = "$USAGE""\n""                             - tdump_skel.Daily.cfg: from GPS_Term."
+set USAGE = "$USAGE""\n"
+set USAGE = "$USAGE""\n""--fatfile ;    : fat file name: name of fat file."
+set USAGE = "$USAGE""\n"
+set USAGE = "$USAGE""\n""--terminal ;   : use this option to leave the session open. "
+set USAGE = "$USAGE""\n"
+if(! $#) then
+	echo "$USAGE"
+	exit 1
+endif
+
+#********Default settings:
+set SITE     = ""
+set DATE     = ""
+set DOY      = ""
+set YEAR     = ""
+set HOUR     = ""
+set GPSTERM  = "OFF"
+set TERMINAL = "ON"
+
+set StarTime = `date +%s`
+echo "START tdump"
+
+while($#)
+	switch($1)
+                case "--configfile":
+			shift
+                        set CONFIGFILE = $1
+			breaksw
+                case "--fatfile":
+			shift
+                        set FATFILE  = "ON"
+                        set GPSTERM  = "ON"
+			breaksw 
+                case "--terminal":
+                        set TERMINAL = "OFF"
+                        set GPSTERM  = "ON"
+			breaksw 
+                default:
+			echo "$USAGE"
+			exit 
+			breaksw	
+	endsw
+	shift
+end
+
+
+
+##********Definizione variabili script******
+set path        = ($path /opt/bin /usr/local/sbin /usr/sbin /sbin /usr/local/bin /usr/bin /bin /usr/X11R6/bin /opt/www/htdig/bin /opt/kde/bin /usr/lib/qt-3.0.4/bin /usr/share/texmf/bin /home/frednet/bin/DumpGPS .)
+set MAINDIR     = /home/frednet/data/FTP_Data/
+set CFGDIR      = /home/frednet/data/WORKDIR/mkrinex/
+set CONFIG_FILE = /home/frednet/.netrc
+set GETSTRINGH  = GPS_Get_HourlyRinex
+set GETSTRINGD  = GPS_Get_DailyRinex
+set GPSFTPGET   = GPS_FTP_Get
+set RAWTMP      = RAWTMP
+set STATIONS    = stations/
+set BRAND       = brand.cfg
+set RESET       = tdump.cfg   #PFmod
+set TDUMPSKELD  = tdump_skel.Daily.cfg
+set TDUMPSKELH  = tdump_skel.Hourly.cfg
+set SITEDIR     = /$SITE
+set LOGFILE     = $CFGDIR$SITE/$SITE.$JOB.log
+set TELNET      = "telnet"
+set ALPHABET    = (A B C D E F G H I J K L M N O P Q R S T U V W X )
+set ALPHAHOUR   = (01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 )
+set TYPEDIR     = (raw rinex rinex_1s rinex_5s )
+set RINEX       = (rinex rinex_1s rinex_5s )
+set TYPE        = "BRAND"
+set RE          = "RE"
+set PROVA       = "RE"
+set YES         = "YES"
+set AVAILABLE   = "NO"
+set O           = "O"
+set i           = 0
+
+#********Script richiamo da GPS_Term*******************#
+if ("$GPSTERM" == "ON") then 
+   set STATION = `cat $CONFIGFILE | awk '! /#/ { print  $1 }  '` 
+   set SITE    = $STATION
+   set DIRLOG  = $CFGDIR$STATION/$TELNET.$STATION.fat
+   #set ADDRESS = `cat $CONFIGFILE | awk '! /#/ { print  $2; print (substr($3,6,length($3))) }  '` script ok #PF_09052007
+   set ADDRESS = `cat $CONFIGFILE | awk '! /#/ { print  $2; print $3 }  '` script ok #PF_09052007   
+   set IPSITE  = `echo $ADDRESS | awk '{   print  $1  }  '`
+   set POSITE  = `echo $ADDRESS | awk '{   print  $2  }  '`       
+   set WHICH   = `cat  $CFGDIR$STATION/$BRAND | awk '! /#/ { if ($1 == "'"$TYPE"'" )   print  $3 }  '` 
+   if ( $TERMINAL == "ON") then
+       echo "tdump: Download file $TELNET.$STATION.fat." 
+       echo "tdump: Start"
+      (echo c; sleep 5; \
+       echo P1PP0; sleep 5; \
+       echo "list,/log"; sleep 30; \
+       echo "print,/log"; sleep 30) | telnet $ADDRESS > $DIRLOG
+       set LOGFTPTIDY =  $CFGDIR$STATION/$TELNET.$STATION.TIDY.fat
+       set CHECKRE = `cat  $DIRLOG | gawk 'NR == 7{ if (substr($1,1,2) == "'"$RE"'")   print "YES"; else print "NO"  }  '`
+       if (-e $DIRLOG ) then
+           #**************Analisi del file di report
+           set HEADER   = `cat $DIRLOG  | gawk '{ if (substr($1,1,2) == "'"$RE"'")  print(substr($1,1,5))  }  '`
+           set START    =  $HEADER[1]
+           set i = 1
+           foreach FLAG ($HEADER)          #Determinazione del flag di iniziorighe per size e datafile
+                  set FLAGDATA = $FLAG
+           end
+           set START    = `cat  $DIRLOG | gawk 'NR == 7{ if (substr($1,1,2) == "'"$RE"'")   print (substr($1,1,5))  }  '`
+           set MIDDLE   = `cat  $DIRLOG | gawk 'NR == 8{ if (substr($1,1,2) == "'"$RE"'")   print (substr($1,1,5))  }  '`
+           set FILE     = `cat  $DIRLOG | gawk 'BEGIN{FS = "[,{} ]" } { for (i = 1; i<=NF; i++)  if (substr($i,1,4) == "'"$STATION"'")   print $i  }  '`
+           set DATAFILE = `cat  $DIRLOG | gawk 'BEGIN{FS = "," } { if (substr($1,1,5) == "'"$FLAGDATA"'" )   print substr($2,1,length($2)-1)}  '`
+           set SIZEFILE = `cat  $DIRLOG | gawk 'BEGIN{FS = "," } { if (substr($1,1,5) == "'"$FLAGDATA"'" )   print substr($1,8,length($1))}  '`
+           foreach DATA ($DATAFILE)
+   		 set YEAR   = `echo   $DATA | gawk 'BEGIN{FS = "[YMDhms]" } {print $1} '`
+    		 set MONTH  = `echo   $DATA | gawk 'BEGIN{FS = "[YMDhms]" } {print $2} '`
+    		 set DAY    = `echo   $DATA | gawk 'BEGIN{FS = "[YMDhms]" } {print $3} '`
+   		 set HOURN  = `echo   $DATA | gawk 'BEGIN{FS = "[YMDhms]" } {print $4} '`
+    		 set MINUTE = `echo   $DATA | gawk 'BEGIN{FS = "[YMDhms]" } {print $5} '`
+           end
+           #************Fine analisi del file di report
+           #************Scrittura del file di con nomi convertiti e corretti e verifica presenza file da ricercare
+           touch $LOGFTPTIDY #Creazione del file di riordino (viene fatta il primo ciclo e poi elinminato al termine di TUTTO il ciclo)"
+           echo "# Index   Site:        File name:    Size:        Data:                     New File:" >> $LOGFTPTIDY
+           set i = 1
+           set NUMBER = $#FILE
+           echo "SITE:       File:          Size:        Date:                     NewName:        Rate:"> $LOGFTPTIDY
+           echo "">> $LOGFTPTIDY
+           echo "=======================================================================================">> $LOGFTPTIDY
+           echo "">> $LOGFTPTIDY
+           while ( $i <= $NUMBER)
+              set YEAR      = `echo   $DATAFILE[$i] | gawk 'BEGIN{FS = "[YMDhms]" } {print $1} '`
+              set MONTH     = `echo   $DATAFILE[$i] | gawk 'BEGIN{FS = "[YMDhms]" } {print $2} '`
+              set DAY       = `echo   $DATAFILE[$i] | gawk 'BEGIN{FS = "[YMDhms]" } {print $3} '`
+              set HOURN     = `echo   $DATAFILE[$i] | gawk 'BEGIN{FS = "[YMDhms]" } {print $4} '`
+              set MINUTE    = `echo   $DATAFILE[$i] | gawk 'BEGIN{FS = "[YMDhms]" } {print $5} '`
+              set DOYN      = `date --date=$YEAR$MONTH$DAY +%j`
+              set NEWHOUR   = `expr $HOURN + 1`
+              set NEWYEAR   = `date --date=$YEAR$MONTH$DAY +%y`
+              if ( "$NEWHOUR" == "25" ) then
+                 set NEWHOUR = 1
+              endif
+              if ( $SIZEFILE[$i] < 5000000 ) then
+                 set DA_HO = H #PF
+                 set ALPHAHOUR = $ALPHABET[$NEWHOUR]
+                 set NEWFILE   =  "$WHICH$STATION$ALPHAHOUR$NEWYEAR.$DOYN"
+              else
+                 set DA_HO = D
+                 set ALPHAHOUR = "A"
+                 set NEWFILE   =  "$WHICH$STATION$DOYN$ALPHAHOUR.$NEWYEAR"
+              endif
+              echo "$SITE        $FILE[$i]      $SIZEFILE[$i]      $YEAR $MONTH $DAY $HOURN $MINUTE          $NEWFILE      $DA_HO" >> $LOGFTPTIDY
+              set i = ` expr $i + 1`
+            end
+       else
+           echo "tdump: error"
+           echo "tdump: no file $DIRLOG"  
+           echo "tdump: STOP"         
+       endif
+       if ( "$CHECKRE" == "YES" ) then
+           echo "tdump: Download correctly done"
+       else
+           echo "tdump: Some problems accours with telnet. Operation failed."
+       endif
+       echo "tdump: Session finished."
+       rm $DIRLOG #PF_09052007
+       exit
+   else
+      echo "tdump: connecting with:$STATION ..." 
+      telnet $ADDRESS
+      exit
+   endif
+endif
+
+#******Definizione variabili costruzione nome file *******#
+set DATADIR = `cat $CONFIGFILE | gawk '! /#/ { if ($1 == "datadir" )   print  $2 }  '` 
+set DATA    = `cat $CONFIGFILE | gawk '! /#/ { if ($1 == "download" )   print  $2 $3}  '`
+set FIELD   = `cat $CONFIGFILE | gawk '! /#/ { if ($1 == "download" )  print $3 }  '` 
+set RATE    = `echo $DATADIR   | gawk 'BEGIN{FS = "/" } {    print  $7 }  '` 
+set SITE    = `echo $DATADIR   | gawk 'BEGIN{FS = "/" } {    print  $6 }  '` 
+
+if ( $FIELD != "") then 
+    set YEAR    = `echo $DATA  | gawk 'BEGIN{FS = "[\"/:-]" } { print  $2 }  '` 
+    set YY      = `echo $YEAR  | gawk '{ print (substr($0,3,4))  } '`
+    set DOY     = `echo $DATA  | gawk 'BEGIN{FS = "[\"/:-]" } { print  $4 }  '`
+    set ALPHA   = `echo $DATA  | gawk 'BEGIN{FS = "[\"/:-]" } { print (substr($9,length($9),length($9)))}  '`
+else
+    set YEAR    = `echo $DATA  | gawk 'BEGIN{FS = "[/-]" } { print  $1 }  '` 
+    set YY      = `echo $YEAR  | gawk '{ print (substr($0,3,4))  } '`
+    set DOY     = `echo $DATA  | gawk 'BEGIN{FS = "[/-]" } { print  $3 }  '`
+    set ALPHA   = ""
+endif
+
+if ("$ALPHA" != "") then
+   set RATE = "Hourly" 
+endif
+
+set HOUR = `echo  $ALPHA | ses2hr`
+set HOUR = `echo $HOUR | gawk '{if (length($0) == 1) print "0"$0} {if (length($0) == 2) print $0} '`
+
+if  ($HOUR != "") then
+    set RATE = "Hourly"
+else
+    set RATE = "Daily"
+endif
+
+
+# Costruzione file di log
+echo "# File di log script $JOB" > $LOGFILE
+set LOGFILE    = $CFGDIR$SITE/$SITE.$JOB.log
+if ( -e $LOGFILE) then
+    rm $LOGFILE         # Se esiste il file di log rimuovilo
+endif
+touch $LOGFILE
+
+
+#############CICLO MAIN FOREACH SITE#################
+#####################################################
+echo "# Inizio ciclo di ricerca per ogni file">> $LOGFILE
+#foreach SITE ($SITE)
+
+             set LCSITE     = `echo $SITE | tr 'A-Z' 'a-z'` # SITE -> site
+             set LOGFTP     = "$CFGDIR$SITE/$TELNET.$SITE.fat"
+             set LOGFTPTIDY = "$CFGDIR$SITE/$TELNET.$SITE.TIDY.fat"
+             set SITEDIR    = "$SITE/"
+             set YEARDIR    = "$YEAR/"
+             set DOYDIR     = "$DOY"
+             set CONFDIR    = "$CFGDIR$SITEDIR$RESET" Ok per il definifivo
+             set WHICH   = `cat  $CFGDIR$SITEDIR$BRAND | awk '! /#/ { if ($1 == "'"$TYPE"'" )   print  $3 }  '` 
+             if ( $RATE == "Hourly") then
+                 set ALPHA   =  $ALPHABET[$HOUR]
+                 set GPSGET  = "$GETSTRINGH $SITE $DOY $HOUR $YEAR"
+                 set SAMPDIR = "Hourly"
+                 set PATH    = $MAINDIR$TYPEDIR[1]/$YEARDIR$DOYDIR/$HOUR 
+                 set CODE    = "$ALPHA$YY.$DOY"
+             else
+                 set SAMPDIR = "Daily"
+                 set ALPHA   = "0"
+                 set GPSGET  = "$GETSTRINGD $SITE $DOY $YEAR"
+                 set PATH    = $MAINDIR$TYPEDIR[1]/$YEARDIR$DOYDIR
+                 set CODE    = "$ALPHA$YY.$DOY"
+             endif
+             set NAME    = "$WHICH$SITE$CODE"
+             set X   = `echo $ALPHA | tr 'A-Z' 'a-z'` # SESSION -> session 
+             set FILERINEX  =  $LCSITE$DOY$X.$YY"d.Z"
+             echo "# ">> $LOGFILE
+             echo "# Sito analizzato: $SITE, $RATE data." >> $LOGFILE
+             echo "# Costruzione codice nome file iniziata ">> $LOGFILE 
+             echo "# Costruzione codice nome file conclusa: --> $NAME ">> $LOGFILE
+             echo "# Set delle directory di ricerca file per $SITE ">> $LOGFILE
+             echo "# Ricerca del file $SAMPDIR." >> $LOGFILE
+             if ( -e $PATH/$NAME ) then
+                 set CHECK = "YES"
+             else
+                 set CHECK = "NO"
+             endif
+             echo "Site: $SITE  Filename: $NAME   Type: $TYPEDIR[1]  $CHECK">> $LOGFILE
+             set CHECKTYPE = `cat $LOGFILE |gawk ' { if ($2 == "'"$SITE"'" &&  $6 == "raw")   print  $7 }  '`
+             if ( "$CHECKTYPE" == "NO" ) then  #Se non c'è il file raw, richiamo comunque GPS_Get_Daily e GPS_Get_Hourly, eventualmente accedo via FTP tramite TermTop #PF01092010 ??vero??
+                 #PF01092010 echo "# $GPSGET">> $LOGFILE             
+                 #PF01092010 $GPSGET
+                 #PF01092010 echo "# $GPSGET concluso">> $LOGFILE
+                 #PF01092010 set CHECKGET = `cat  $LOGFILE | awk '! /#/ { if ( $1 == "'"$GETSTRINGH"'" || $1 == "'"$GETSTRINGD"'" && $5 = "not")   print "NO RAW FILE" }  '`
+                 #PF01092010 if ("$CHECKGET" == "NO RAW FILE") then
+                 #PF01092010     set CHECK = "YES"
+                 #PF01092010 else
+                 #PF01092010     set CHECK = "NO"
+                 #PF01092010 endif
+                 #PF01092010 if ( "$CHECK" == "YES" ) then  #Controllo sull'operato di GPS_Get, se non ci sono i file RAW li richiedo via FTP
+		     #inizio sessione: file grezzi con nomi non ancora corretti sono già presenti sul disco TOPCON
+                     #DZ30122013 set TOPCONFILES = `ls $CFGDIR$SITE/$SAMPDIR/$SITE* $CFGDIR$SITE/$SAMPDIR/$SITE*.tps` 
+		     # set TOPCONFILES = `ls $CFGDIR$SITE/$SAMPDIR/$SITE*` commentata emagrin 2022
+		     set TEMPRAW = TEMPRAW
+		     set TOPCONFILES = "" #PF 2014.10.16. Temporaneo
+		     foreach TOPCONFILE($TOPCONFILES)
+		          teqc -O.int 1 -O.dec 1 +err err.txt  $TOPCONFILE > $CFGDIR$SITE/$SAMPDIR/$TEMPRAW
+			  set YEARDOWNLOAD  = `cat  $CFGDIR$SITE/$SAMPDIR/$TEMPRAW | awk '{ if ( $8 == "TIME" && $9 == "OF")   print substr($1,3,2) } '`
+			  set MONTHDOWNLOAD = `cat  $CFGDIR$SITE/$SAMPDIR/$TEMPRAW | awk '{ if ( $8 == "TIME" && $9 == "OF")   print $2 } '`
+			  #set MONTHDOWNLOAD = `echo  $MONTHDOWNLOAD | awk '{ if ( length($1) == 1)   print "0"$1 } { if ( length($1) == 2)   print $1 }'`
+			  #set MONTHDOWNLOAD = $MONTHDOWNLOAD
+			  set DAYDOWNLOAD   = `cat  $CFGDIR$SITE/$SAMPDIR/$TEMPRAW | awk '{ if ( $8 == "TIME" && $9 == "OF")   print $3 } '`
+			  #set DAYDOWNLOAD   = `echo  $DAYDOWNLOAD | awk '{ if ( length($1) == 1)   print "0"$1 } { if ( length($1) == 2)   print $1 }'`
+			  #set DAYDOWNLOAD   = $DAYDOWNLOAD
+			  set DOYDOWNLOAD   = `date --date="$MONTHDOWNLOAD/$DAYDOWNLOAD/$YEARDOWNLOAD" +%j`
+			  set HOURDOWNLOAD  = `cat  $CFGDIR$SITE/$SAMPDIR/$TEMPRAW | awk '{ if ( $8 == "TIME" && $9 == "OF")   print $4 } '`
+			  #set HOURDOWNLOAD  = `echo $HOURDOWNLOAD | awk '{ if ( substr($1,1,1) == "0" )   print substr($1,2,1) } '`
+			  set HOURDOWNLOAD  = `expr $HOURDOWNLOAD + 1 `
+			  #set HOURDOWNLOAD  = `echo  $HOURDOWNLOAD | awk '{ if ( length($1) == 1)   print "0"$1 } '`
+			  set ALPHADOWNLOAD = "$ALPHABET[$HOURDOWNLOAD]"
+			  if (("$YEARDOWNLOAD" == "$YY") && ("$DOYDOWNLOAD" == "$DOY") && ("$ALPHADOWNLOAD" == "$ALPHA")) then
+			     cat $TOPCONFILE* > $CFGDIR$SITE/$SAMPDIR/$WHICH$SITE$CODE #cat di tutti gli spezzoni di file grezzo appartenenti alla stessa ora e li rinomina #PF2014.10.12
+			     rm $TOPCONFILE* #rimuovi i file grezzi  #PF2014.10.12
+			     #mv $TOPCONFILE $CFGDIR$SITE/$SAMPDIR/$WHICH$SITE$CODE
+			     rm $LOGFILE
+			     rm $CFGDIR$SITE/$SAMPDIR/$TEMPRAW
+			     rm $CFGDIR$SITE/$SAMPDIR/err*
+			     rm err*
+			     exit
+			  endif
+			  rm $CFGDIR$SITE/$SAMPDIR/$TEMPRAW
+			  #rm $CFGDIR$SITE/$SAMPDIR/err*
+			  rm err*
+		     end
+		     #fine sessione: file grezzi con nomi non ancora corretti sono già presenti sul disco TOPCON
+		     echo  "# File $TYPEDIR[1] per $SITE non disponibili: ">> $LOGFILE  
+                     echo  "# Richiesta FTP">> $LOGFILE  
+                     #Definizione delle variabili per il collegamento telnet
+                     #set ADDRESS = `cat $CONFDIR | awk '! /#/ { if ($1 == "'"$SITE"'" )   print  $2; print (substr($3,6,length($3)))}  '` #script ok #PF_09052007
+                     set ADDRESS = `cat $CONFDIR | awk '! /#/ { if ($1 == "'"$SITE"'" )   print  $2; print $3 }  '` #script ok #PF_09052007			     	     
+                     set IPSITE = `echo $ADDRESS | awk '{   print  $1  }  '`
+		     set POSITE = `echo $ADDRESS | awk '{   print  $2  }  '`
+		     #echo "$IPSITE $SITE" | mailx -s " -- tdump ip $SITE" "pfabris@inogs.it"
+		     #echo "$POSITE $SITE" | mailx -s " -- tdump porta $SITE" "pfabris@inogs.it"
+		     if ( $IPSITE == "" || $POSITE == "" ) then
+                         echo "# FATAL ERROR: no IP or Port set, check $CONFDIR ">> $LOGFILE
+                         echo "# STOP">> $LOGFILE
+                         exit
+                     endif 
+                     echo "# Download della lista dei file" >> $LOGFILE
+		     ####INIZIO SESSIONE SPECIFICA TOPCON ######
+                     (echo c; sleep 5; \
+	              echo P1PP0; sleep 5; \
+		      echo ; sleep 5;\
+		      echo "print,/log/&[name,size,time]"; sleep 30) | telnet $IPSITE $POSITE > $LOGFTP
+		      echo "# $ADDRESS" >> $LOGFILE
+                     echo "# Ricerca del file log $LOGFTP effettuato  per il sito $SITE">> $LOGFILE
+                     if (-e $LOGFTP ) then
+                         echo "# FTP per sito $SITE andata a buon fine, file di log $LOGFTP presente" >> $LOGFILE
+                         echo "# Analisi del file di log, riordine e rinomina dei file" >> $LOGFILE
+                         #**************Analisi del file di report
+                         set HEADER   = `cat  $LOGFTP | gawk '{ if (substr($1,1,2) == "'"$RE"'")     print(substr($1,1,5))  }  '`
+#			 set FILE     = `cat  $LOGFTP | gawk '{ if (substr($3,1,4) == "'"$SITE"'")   print substr($3,1,length($3)-1); \
+#						if (substr($2,1,4) == "'"$SITE"'")   print substr($2,1,length($2)-1); }'`
+			 set FILE    = `cat  $LOGFTP | gawk '{ if (substr($3,1,4) == "'"$SITE"'")   print substr($3,1,length($3)-1); \
+						if (substr($2,1,4) == "'"$SITE"'")  print substr($2,1,length($2)-1); \
+						if (substr($2,2,4) == "'"$SITE"'")  {idxC = index($2,","); print substr($2,2,idxC-2)};}'` #mod by DZ (sep 2021)
+
+			#sleep 100
+
+#                         set SIZEFILE = `cat  $LOGFTP | gawk '{ if (substr($3,1,4) == "'"$SITE"'")   print substr($4,1,length($4)-1); \
+#						if (substr($2,1,4) == "'"$SITE"'")   print substr($3,1,length($3)-1); }'`
+
+	                 set SIZEFILE = `cat  $LOGFTP | gawk '{ if (substr($3,1,4) == "'"$SITE"'")   print substr($4,1,length($4)-1); \
+                                                if (substr($2,1,4) == "'"$SITE"'")   print substr($3,1,length($3)-1); \
+						if (substr($2,2,4) == "'"$SITE"'") \
+							{idxC = index($2,","); secStr = substr($2,idxC+1,length($2)); \
+							idxC2 = index(secStr,","); print substr(secStr,1,idxC2-1)};}'` #mod by DZ (sep 2021)
+
+#			 set DATAFILE = `cat  $LOGFTP | gawk '{ if (substr($3,1,4) == "'"$SITE"'")   print substr($5,1,length($5)-2); \
+#						if (substr($2,1,4) == "'"$SITE"'")   print substr($4,1,length($4)-2); }'` #numero di secondi ultima modifica file a partire dal 01/01/1988
+                         set DATAFILE = `cat  $LOGFTP | gawk '{ if (substr($3,1,4) == "'"$SITE"'")   print substr($5,1,length($5)-2); \
+                                                if (substr($2,1,4) == "'"$SITE"'")   print substr($4,1,length($4)-2); \
+						if (substr($2,2,4) == "'"$SITE"'") \
+							{idxC = index($2,","); secStr = substr($2,idxC+1,length($2)); \
+							idxC2 = index(secStr,","); terStr = substr(secStr,idxC2+1,length(secStr));\
+							idxC3 = index(terStr,"}"); print substr(terStr,1,idxC3-1)};}'` # #mod by DZ (sep 2021)
+
+			 set DATAMARK = 567993600 #numero di secondi dal 01/01/1970 al 01/01/1988
+			 #set FILE     = `cat  $LOGFTP | gawk '{ if (substr($3,1,4) == "'"$SITE"'")   print substr($3,1,length($3)-1)}'`
+                         #set SIZEFILE = `cat  $LOGFTP | gawk '{ if (substr($3,1,4) == "'"$SITE"'")   print substr($4,1,length($4)-1)}'`
+			 #set DATAFILE = `cat  $LOGFTP | gawk '{ if (substr($3,1,4) == "'"$SITE"'")   print substr($5,1,9)}'` #numero di secondi ultima modifica file a partire dal 01/01/1988
+			 #set DATAMARK = 567993600 #numero di secondi dal 01/01/1970 al 01/01/1988
+			 #foreach DATA($DATAFILE)
+			 #	 set TOTSECONDS = `expr $DATAMARK + $DATA`
+   		         #       set YEAR   = `date --date="@$TOTSECONDS" +%Y`
+    			 #       set MONTH  = `date --date="@$TOTSECONDS" +%m`
+    		         #       set DAY    = `date --date="@$TOTSECONDS" +%d`
+   		         #       set HOURN  = `date --date="@$TOTSECONDS" +%H`
+    			 #       set MINUTE = `date --date="@$TOTSECONDS" +%M`
+          	         #end
+                         #************Fine analisi del file di report
+                         #************Scrittura del file di con nomi convertiti e corretti e verifica presenza file da ricercare
+                         echo "# Creazione del file di riordino e rinomina dei file $LOGFTPTIDY" >> $LOGFILE
+                         touch $LOGFTPTIDY #Creazione del file di riordino (viene fatta il primo ciclo e poi elinminato al termine di TUTTO il ciclo)"
+                         echo "#">> $LOGFTPTIDY
+                         echo "# Index   Site:        File name:    Size:        Data:                     New File:" >> $LOGFTPTIDY
+                         echo "# Inizio scrittura sul file $TELNET$SITE.tidy.log  per la stazione $SITE" >> $LOGFILE
+                         set i = 1
+                         set NUMBER = $#FILE
+                         echo "SITE:       File:          Size:        Date:                     NewName:        Rate:"> $LOGFTPTIDY
+                         echo "">> $LOGFTPTIDY
+                         echo "=======================================================================================">> $LOGFTPTIDY
+                         echo "">> $LOGFTPTIDY
+                         set DATAFILE_PY = "$CFGDIR$SITE/DATAFILE_PY"
+                         set SIZEFILE_PY = "$CFGDIR$SITE/SIZEFILE_PY"
+                         set FILE_PY = "$CFGDIR$SITE/FILE_PY"
+			 echo $DATAFILE > $DATAFILE_PY
+        		 echo $SIZEFILE > $SIZEFILE_PY
+        		 echo $FILE > $FILE_PY
+			 tdump_while_loop.py $DATAMARK $DATAFILE_PY $SIZEFILE_PY $FILE_PY $WHICH $SITE $LOGFTPTIDY
+			 #while ( $i <= $NUMBER) 
+			 #    set TOTSECONDS = `expr $DATAMARK + $DATAFILE[$i]`
+			 #    #echo "$TOTSECONDS $DATAMARK $DATAFILE[$i]"
+			 #    set YEAR   = `date --date="@$TOTSECONDS" +%Y`
+			 #    set MONTH  = `date --date="@$TOTSECONDS" +%m`
+			 #    set DAY    = `date --date="@$TOTSECONDS" +%d`
+			 #    set HOURN  = `date --date="@$TOTSECONDS" +%H`
+			 #    set MINUTE = `date --date="@$TOTSECONDS" +%M` 
+			 #    set DOYN      = `date --date=$YEAR$MONTH$DAY +%j`
+			 #    set NEWHOUR   = `expr $HOURN + 1`
+			 #    set NEWYEAR   = `date --date=$YEAR$MONTH$DAY +%y`
+			 #    if ( "$NEWHOUR" == "25" ) then
+				 #        set NEWHOUR = 1
+				 #    endif
+				 #if ( $SIZEFILE[$i] < 15000000 ) then
+					 #set DA_HO = H #PF
+					 #set ALPHAHOUR = `echo $FILE[$i] | gawk '{print substr($1,9,1)}'  | tr 'a-z' 'A-Z'`
+					 #set NEWFILE   =  "$WHICH$SITE$ALPHAHOUR$NEWYEAR.$DOYN"
+					 #else
+					 #set DA_HO = D
+					 #set ALPHAHOUR = "A"
+					 #set NEWFILE   =  "$WHICH$SITE$DOYN$ALPHAHOUR.$NEWYEAR"
+					 #endif
+					 #echo "$SITE        $FILE[$i]      $SIZEFILE[$i]      $YEAR $MONTH $DAY $HOURN $MINUTE          $NEWFILE      $DA_HO" >> $LOGFTPTIDY
+					 #set i = ` expr $i + 1`
+					 #end
+			 ####### FINE SESSIONE SPECIFICA TOPCON #########
+                         echo "# Fine scrittura sul file $TELNET$SITE.tidy.log  per la stazione $SITE" >> $LOGFILE
+                         #Controllo il file con i nomi esatti e verifico se è presente il file richiesto
+                         echo "# Inizio controllo dei file richiesti" >> $LOGFILE
+                         set RAWAVAILABLE = `cat  $LOGFTPTIDY | gawk '{ if ($1 == "'"$SITE"'")   print $9  }  '`
+                         foreach RAW ($RAWAVAILABLE)
+                                if ( "$RAW" == "$NAME") then
+                                    set RATEAVAILABLE = `cat  $LOGFTPTIDY | gawk '{ if ($9 == "'"$RAW"'")   print $10  }  '`
+                                    #if ( ("$RATEAVAILABLE" == "H" && "$RATE" == "Hourly") || ("$RATEAVAILABLE" == "D" && "$RATE" == "Daily") ) then #PF2009
+                                       set AVAILABLE = "YES"
+                                    #endif #PF2009
+                                endif
+                         end
+                         if ( "$AVAILABLE" == "$YES" ) then
+                         #if ( "$YES" == "$YES" ) then 
+			    echo "# File $NAME è disponibile " >> $LOGFILE
+			    set FILEFTPS  = `cat  $LOGFTPTIDY | gawk '{ if ($9 == "'"$NAME"'")   print $2  }  ' | sort -n`  #2015.01.07 PFabris Aggiunto "| sort -n"#PF.2019.09.10
+			    	#set alphahour = `echo $ALPHAHOUR | tr 'A-Z' 'a-z''` #PF.2019.09.10
+			        #set FILEFTPS = $SITE$MONTH$DAY$alphahour #PF.2019.09.10
+			    #set FILEFTPS = `cat  $LOGFTPTIDY | grep $FILEFTP | gawk '{ print $2  }  '`#PF2009
+			    if ( ! -e $CFGDIR$SITEDIR$SAMPDIR/$FILEFTPS[1] ) then #se il file non è gia presente in SITEDIR/SAMPDIR/ lo scarico via ftp (ago 2008)
+                                 echo "# Download file $NAME via FTP" >>  $LOGFILE
+                                 echo "GPS_FTP_Get" >>  $LOGFILE 
+                                 #PF.2019.09.10 set FILEFTPS = `cat  $LOGFTPTIDY | gawk '{ if ($9 == "'"$NAME"'")   print $2  }  '| sort -n`  #2015.01.07 PFabris Aggiunto "| sort -n"`
+                                 set ADDRESS   = `cat $CONFDIR | awk '! /#/ { if ($1 == "'"$SITE"'" )   print  $2 }  '`
+                                 echo "address: $ADDRESS"
+				 foreach DOPPIFILE ($FILEFTPS)                    #PF2009
+                                     echo "# $GPSFTPGET -s $SITE -f $DOPPIFILE -y $YEAR -d $DOY -R $RATE">> $LOGFILE #PF2009
+                                     #PF2009$GPSFTPGET -s $SITE -f $FILEFTP -y $YEAR -d $DOY -R $RATE #Modified
+				     $GPSFTPGET -s $SITE -f $DOPPIFILE -y $YEAR -d $DOY -R $RATE #PF2009
+                                     echo "# $GPSFTPGET completato" >> $LOGFILE
+				 end                                           #PF2009
+				 #cat /home/frednet/data/WORKDIR/mkrinex/$STATION/$FILEFTPS[2] >> /home/frednet/data/WORKDIR/mkrinex/$STATION/$FILEFTPS[1]#PF2009
+				 #touch $CFGDIR$SITEDIR$SAMPDIR/$RAWTMP
+				 #echo "cat $CFGDIR$SITEDIR$SAMPDIR/$FILEFTPS[2] > $CFGDIR$SITEDIR$SAMPDIR/$RAWTMP"   #PF2009
+				 if ( $#FILEFTPS > 1) then
+				     if ( $#FILEFTPS == 6) then
+				        cat $CFGDIR$SITEDIR$SAMPDIR/$FILEFTPS[6] >> $CFGDIR$SITEDIR$SAMPDIR/$FILEFTPS[5]
+				        cat $CFGDIR$SITEDIR$SAMPDIR/$FILEFTPS[5] >> $CFGDIR$SITEDIR$SAMPDIR/$FILEFTPS[4]
+				     	cat $CFGDIR$SITEDIR$SAMPDIR/$FILEFTPS[4] >> $CFGDIR$SITEDIR$SAMPDIR/$FILEFTPS[3]
+					cat $CFGDIR$SITEDIR$SAMPDIR/$FILEFTPS[3] >> $CFGDIR$SITEDIR$SAMPDIR/$FILEFTPS[2]
+				     endif
+				     if ( $#FILEFTPS == 5) then
+				        cat $CFGDIR$SITEDIR$SAMPDIR/$FILEFTPS[5] >> $CFGDIR$SITEDIR$SAMPDIR/$FILEFTPS[4]
+				     	cat $CFGDIR$SITEDIR$SAMPDIR/$FILEFTPS[4] >> $CFGDIR$SITEDIR$SAMPDIR/$FILEFTPS[3]
+					cat $CFGDIR$SITEDIR$SAMPDIR/$FILEFTPS[3] >> $CFGDIR$SITEDIR$SAMPDIR/$FILEFTPS[2]
+				     endif				 
+				     if ( $#FILEFTPS == 4) then
+				     	cat $CFGDIR$SITEDIR$SAMPDIR/$FILEFTPS[4] >> $CFGDIR$SITEDIR$SAMPDIR/$FILEFTPS[3]
+					cat $CFGDIR$SITEDIR$SAMPDIR/$FILEFTPS[3] >> $CFGDIR$SITEDIR$SAMPDIR/$FILEFTPS[2]
+				     endif				 
+				     if ( $#FILEFTPS == 3) then
+				     	cat $CFGDIR$SITEDIR$SAMPDIR/$FILEFTPS[3] >> $CFGDIR$SITEDIR$SAMPDIR/$FILEFTPS[2]
+				     endif
+				     cat $CFGDIR$SITEDIR$SAMPDIR/$FILEFTPS[2] >> $CFGDIR$SITEDIR$SAMPDIR/$FILEFTPS[1]
+				 endif
+				 #cat $CFGDIR$SITEDIR$SAMPDIR/$FILEFTPS[2] >> $CFGDIR$SITEDIR$SAMPDIR/$FILEFTPS[1]
+				 #echo "cat $CFGDIR$SITEDIR$SAMPDIR/$FILEFTPS[1] >> $CFGDIR$SITEDIR$SAMPDIR/$RAWTMP"   #PF2009
+				 #rm $CFGDIR$SITEDIR$SAMPDIR/$FILEFTPS[2] $CFGDIR$SITEDIR$SAMPDIR/$FILEFTPS[1] #PF2009
+				 #cat $CFGDIR$SITEDIR$SAMPDIR/$RAWTMP
+				 #mv $CFGDIR$SITEDIR$SAMPDIR/$RAWTMP $CFGDIR$SITEDIR$SAMPDIR/$FILEFTPS[1]       #PF2009
+				 #cp $CFGDIR$SITEDIR$SAMPDIR/$FILEFTPS[2] /home/frednet/WorkPaolo/LABORATORIO/TESTEQC/
+				 #cp $CFGDIR$SITEDIR$SAMPDIR/$FILEFTPS[1] /home/frednet/WorkPaolo/LABORATORIO/TESTEQC/
+				 #cp $CFGDIR$SITEDIR$SAMPDIR/$FILEFTPS[1] /home/frednet/WorkPaolo/LABORATORIO/TESTEQC/$RAWTMP
+				 #echo "cat /home/frednet/WorkPaolo/LABORATORIO/TESTEQC/$FILEFTPS[2] >> /home/frednet/WorkPaolo/LABORATORIO/TESTEQC/$FILEFTPS[1]"
+		            endif #(ago 2008)
+                            if ( -e $CFGDIR$SITEDIR$SAMPDIR/$FILEFTPS[1] ) then #PF2009
+                                echo "# Il file $FILEFTPS[1] e presente in $SITEDIR$SAMPDIR">> $LOGFILE         #PF2009
+                                echo "# Rinomino il file $FILEFTPS[1] con $NAME">> $LOGFILE                     #PF2009
+				echo "mv  $CFGDIR/$SITEDIR$SAMPDIR/$FILEFTPS[1]  $CFGDIR/$SITEDIR$SAMPDIR/$NAME"
+                                mv  $CFGDIR/$SITEDIR$SAMPDIR/$FILEFTPS[1]  $CFGDIR/$SITEDIR$SAMPDIR/$NAME       #PF2009
+                                echo "# File rinominato">> $LOGFILE
+                            else
+                                echo "# Il file $NAME non è presente in $SITEDIR$SAMPDIR.">> $LOGFILE 
+                                echo "# STOP">> $LOGFILE 
+                            endif
+                          echo "# STOP. Operazione terminata ">> $LOGFILE 
+                      else
+                          echo "# File $NAME non disponibile " >> $LOGFILE
+                      endif
+                   else
+                      echo "# FATAL ERROR. Missing: $LOGFTP ." >> $LOGFILE
+                      echo "# STOP" >> $LOGFILE
+                      exit
+                   endif
+                #PF01092010 endif
+             else
+                echo "# File RAW già presenti">> $LOGFILE 
+                echo "# ">> $LOGFILE
+             endif
+
+#end
+echo "#  ">> $LOGFILE 
+echo "#  ">> $LOGFILE 
+echo "# STOP. Operazione conclusa ">> $LOGFILE 
+
+
+# Clean
+
+#rm $LOGFTP #PF_09052007
+#rm $LOGFILE
+echo $LOGFTP $LOGFILE

@@ -1,0 +1,47 @@
+#!/bin/tcsh
+set path = ($path /opt/bin /usr/local/sbin /usr/sbin \
+                  /sbin /usr/local/bin /usr/bin /bin \
+                  /usr/X11R6/bin /opt/www/htdig/bin  \
+                  /opt/kde/bin /usr/lib/qt-3.0.4/bin \
+                  /usr/share/texmf/bin /home/frednet/bin .)
+set Params = "$*"
+set ParamsNum = "$#"
+set AllowedParamNames = "-a -t"
+set DelayTime = 2
+set AppName = ""
+set PidNum = ""
+sleep 2
+foreach Param ($Params)
+ foreach AllowedParamName ($AllowedParamNames)
+  if ("$Param" == "$AllowedParamName") then
+   set ParamValue = `echo "$Params" | gawk '{for (i = 1; i <= '"$ParamsNum"' ; i++) {I=i+1; if ( $i == "'"$Param"'") print $I}}'`
+   switch ($Param)
+     case "-a":
+        set AppName = "$ParamValue"
+	breaksw
+     case "-t":
+        set DelayTime = "$ParamValue"
+	breaksw
+    endsw
+  endif
+ end
+end
+set StartTime = `date +%s`
+if ("$AppName" == "") then
+   echo "waiting mode: sleeping for $DelayTime seconds"
+else
+   set PidNum = `ps -ef | gawk '$9 ~"'"$AppName"'" || $8 ~"'"$AppName"'" {print $2}'`
+   if ("$PidNum" != "") then
+      echo "killing mode: process $PidNum --> $AppName will be killed after $DelayTime seconds"
+   else
+      echo "No $AppName active"
+   endif
+endif
+set StopTime = `expr $StartTime + $DelayTime`
+while ( `date +%s` <= $StopTime)
+	sleep 1
+end
+
+kill_family $PidNum
+
+echo "Jobs end"

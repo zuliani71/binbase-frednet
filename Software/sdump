@@ -1,0 +1,151 @@
+#!/bin/tcsh  
+# create by PFabris (March 2007)
+# modified by DZuliani (december 2013)
+# modified by PFabris (january 2024)
+set JOB = `basename $0`
+set PID = $$
+set LOCALDIR = `dirname $0`
+
+set USAGE = "\n"
+set USAGE = "$USAGE""USAGE:"
+set USAGE = "$USAGE""\n""`basename $0`  --configfile | --fatfile | --terminal  "
+set USAGE = "$USAGE""\n"
+set USAGE = "$USAGE""\n""--configfile ; : config file: "
+set USAGE = "$USAGE""\n""                             - sdump.cfg: from GPS_DumpHourlyRaw or "
+set USAGE = "$USAGE""\n""                                          from GPS_DumpDailyRaw."
+set USAGE = "$USAGE""\n""                             - sdump_skel.Daily.cfg: from GPS_Term."
+set USAGE = "$USAGE""\n"
+set USAGE = "$USAGE""\n""--fatfile ;    : fat file name: name of fat file."
+set USAGE = "$USAGE""\n"
+set USAGE = "$USAGE""\n""--terminal ;   : use this option to leave the session open. "
+set USAGE = "$USAGE""\n"
+
+if(! $#) then
+	echo "$USAGE"
+	exit 1
+endif
+
+#********Default settings:
+set SITE     = ""
+set DATE     = ""
+set DOY      = ""
+set YEAR     = ""
+set HOUR     = ""
+set GPSTERM  = "OFF"
+set TERMINAL = "ON"
+
+while($#)
+	switch($1)
+                case "--configfile":
+			shift
+                        set CONFIGFILE = $1
+			breaksw
+                case "--fatfile":
+			shift
+                        set FATFILE  = "ON"
+                        set GPSTERM  = "ON"
+			breaksw 
+                case "--terminal":
+                       set TERMINAL = "OFF"
+                        set GPSTERM  = "ON"
+			breaksw 
+                default:
+			echo "$USAGE"
+			exit 
+			breaksw	
+	endsw
+	shift
+end
+
+
+
+##********Definizione variabili script******
+set path        = ($path /opt/bin /usr/local/sbin /usr/sbin /sbin /usr/local/bin /usr/bin /bin /usr/X11R6/bin /opt/www/htdig/bin /opt/kde/bin /usr/lib/qt-3.0.4/bin /usr/share/texmf/bin /home/frednet/bin/DumpGPS .)
+set MAINDIR     = /home/frednet/data/FTP_Data/
+set CFGDIR      = /home/frednet/data/WORKDIR/mkrinex/
+set CONFIG_FILE = /home/frednet/.netrc
+set GETSTRINGH  = GPS_Get_HourlyRinex
+set GETSTRINGD  = GPS_Get_DailyRinex
+set GPSFTPGET   = GPS_FTP_Get
+set RAWTMP      = RAWTMP
+set STATIONS    = stations/
+set BRAND       = brand.cfg
+set RESET       = sdump.cfg   #PFmod
+set SDUMPSKELD  = sdump_skel.Daily.cfg
+set SDUMPSKELH  = sdump_skel.Hourly.cfg
+set SITEDIR     = /$SITE
+set LOGFILE     = $CFGDIR$SITE/$SITE.$JOB.log
+set TELNET      = "telnet"
+set ALPHABET    = (A B C D E F G H I J K L M N O P Q R S T U V W X )
+set ALPHAHOUR   = (01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 )
+set TYPEDIR     = (raw rinex rinex_1s rinex_5s )
+set RINEX       = (rinex rinex_1s rinex_5s )
+set TYPE        = "BRAND"
+set RE          = "RE"
+set PROVA       = "RE"
+set YES         = "YES"
+set AVAILABLE   = "NO"
+set O           = "O"
+set i           = 0
+
+#********Script richiamo da GPS_Term*******************#
+if ("$GPSTERM" == "ON") then 
+   set STATION = `cat $CONFIGFILE | awk '! /#/ { print  $1 }  '` 
+   set SITE    = $STATION
+   set DIRLOG  = $CFGDIR$STATION/$TELNET.$STATION.fat
+   set ADDRESS = `cat $CONFIGFILE | awk '! /#/ { print  $2; print $3 }  '` script ok #PF_09052007   
+   set IPSITE  = `echo $ADDRESS | awk '{   print  $1  }  '`
+   set POSITE  = `echo $ADDRESS | awk '{   print  $2  }  '`       
+   set WHICH   = `cat  $CFGDIR$STATION/$BRAND | awk '! /#/ { if ($1 == "'"$TYPE"'" )   print  $3 }  '` 
+endif
+
+#******Definizione variabili costruzione nome file *******#
+set DATADIR = `cat $CONFIGFILE | gawk '! /#/ { if ($1 == "datadir" )   print  $2 }  '` 
+set DATA    = `cat $CONFIGFILE | gawk '! /#/ { if ($1 == "download" )   print  $2 $3}  '`
+set FIELD   = `cat $CONFIGFILE | gawk '! /#/ { if ($1 == "download" )  print $3 }  '` 
+set RATE    = `echo $DATADIR   | gawk 'BEGIN{FS = "/" } {    print  $7 }  '` 
+set SITE    = `echo $DATADIR   | gawk 'BEGIN{FS = "/" } {    print  $6 }  '` 
+set SAMPDIR = "Hourly"
+
+if ( $FIELD != "") then 
+    set YEAR    = `echo $DATA  | gawk 'BEGIN{FS = "[\"/:-]" } { print  $2 }  '` 
+    set YY      = `echo $YEAR  | gawk '{ print (substr($0,3,4))  } '`
+    set DOY     = `echo $DATA  | gawk 'BEGIN{FS = "[\"/:-]" } { print  $4 }  '`
+    set ALPHA   = `echo $DATA  | gawk 'BEGIN{FS = "[\"/:-]" } { print (substr($9,length($9),length($9)))}  '`
+else
+    set YEAR    = `echo $DATA  | gawk 'BEGIN{FS = "[/-]" } { print  $1 }  '` 
+    set YY      = `echo $YEAR  | gawk '{ print (substr($0,3,4))  } '`
+    set DOY     = `echo $DATA  | gawk 'BEGIN{FS = "[/-]" } { print  $3 }  '`
+    set ALPHA   = ""
+endif
+
+set HOUR     = `echo $ALPHA | ses2hr | gawk '{if (length($0) == 1) print "0"$0} {if (length($0) == 2)  print $0}'`
+set DOYSBACK = `expr $DOY - 1`
+set MM       = `date --date="01/01/$YEAR $DOYSBACK days" +%m`
+set GG       = `date --date="01/01/$YEAR $DOYSBACK days" +%d`
+set site     = `echo $SITE  | tr 'A-Z' 'a-z'`
+set alpha    = `echo $ALPHA | tr 'A-Z' 'a-z'`
+
+#set FILE =  $SITE$DOY$ALPHA.dat
+set FILE =  $SITE$ALPHA$YEAR.$DOY
+
+$GPSFTPGET -s $SITE -f $FILE -y $YEAR -d $DOY -R $RATE #PF2009
+# TUDI1K14.202
+set NAME    = "S$SITE$ALPHA$YY.$DOY"                           
+set NAMERNXo = $site$DOY$alpha.$YY"o"
+set NAMERNXn = $site$DOY$alpha.$YY"n"
+
+if ( -e $CFGDIR$SITE/$SAMPDIR/$FILE ) then
+	mv  $CFGDIR$SITE/$SAMPDIR/$FILE         $CFGDIR$SITE/$SAMPDIR/$NAME		#Rinomino file raw
+	#mv  $CFGDIR$SITE/$SAMPDIR/$FILE.$YY"O"  $CFGDIR$SITE/$SAMPDIR/$NAMERNXo		#Rinomino file rinex
+	#mv  $CFGDIR$SITE/$SAMPDIR/$FILE.$YY"N"  $CFGDIR$SITE/$SAMPDIR/$NAMERNXn		#Rinomino file rinex
+        echo "# File rinominato">> $LOGFILE
+else
+        echo "# Il file $NAME non è presente in $SITEDIR$SAMPDIR.">> $LOGFILE 
+        echo "# STOP">> $LOGFILE 
+endif
+
+# Clean
+
+#rm $LOGFTP #PF_09052007
+#rm $LOGFILE

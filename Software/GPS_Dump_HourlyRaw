@@ -1,0 +1,1259 @@
+#!/bin/tcsh 
+# created by DZ (April 2003)
+# modified by PF  (May 2015)
+# modified by PF  (March 2024)
+# modified by PF  (June 2024)
+
+#******************** Definizione delle variabili principali ********************
+set path = ($path /opt/bin /usr/local/sbin /usr/sbin /sbin /usr/local/bin /usr/bin /bin /usr/X11R6/bin /opt/www/htdig/bin /opt/kde/bin \
+				  /usr/lib/qt-3.0.4/bin /usr/share/texmf/bin /home/frednet/bin .)
+
+# start Time of the JOB
+echo
+echo
+echo '++++++++++++++++++++++++++++++'
+date
+set StarTime = `date +%s`
+set JOB = `basename $0`
+set DataType = "Hourly" # Modificato # Modificato per Hourly
+set SessionType = 'A' # per Hourly questo va modificato ad ogni ora
+set Year = `date +%Y | gawk '{print substr($0,length($0)-1,length($0))}'`
+set YearLong = `date +%Y | gawk '{print substr($0,length($0)-3,length($0))}'`
+set TODAY = `date +%j`
+set YESTERDAY = `date --date='yesterday' +%j`
+set HOURNOW = `date +%H`
+# set HOURNOW = `date --date='1 hour ago' +%H`
+if ($HOURNOW == 00) then
+   set SPANTIME = 1
+   set HOURNOW = 24
+else
+   set SPANTIME = 0
+endif
+set HOURNOW_Year = `date -d$SPANTIME' hour ago' +%Y | gawk '{print substr($0,length($0)-1,length($0))}'`
+set HOURNOW_YearLong = `date -d$SPANTIME' hour ago' +%Y | gawk '{print substr($0,length($0)-3,length($0))}'`
+set HOURNOW_DOY = `date -d$SPANTIME' hour ago' +%j`
+# N.B. YESTERDAY_Year e YESTERDAY_YearLong diventeranno
+# Year e YearLong all'interno del loop che include il
+# download della fat e dei dati (a meno che l'anno non
+# venga passato come parametro di riga), Year e YearLong
+# definiti precedentemente vengono usati solo per il nome
+# e la data del logfile
+set YESTERDAY_Year = `date --date='yesterday' +%Y | gawk '{print substr($0,length($0)-1,length($0))}'`
+set YESTERDAY_YearLong = `date --date='yesterday' +%Y | gawk '{print substr($0,length($0)-3,length($0))}'`
+
+#******************** Definizione delle directory principali ********************
+set DumpDir = '/data'
+set LogDir  = 'WORKDIR/LOGS'
+set DwnlDir = 'WORKDIR/mkrinex'
+set RnxDir  = 'FTP_Data/rinex'
+set RwDir   = 'FTP_Data/raw'
+set ScptDir = 'scripts'
+set ActualUser = "$user"
+set RawDir   = "$DumpDir/$ActualUser/$RwDir"
+set RinexDir = "$DumpDir/$ActualUser/$RnxDir"
+set LogDir   = "$DumpDir/$ActualUser/$LogDir"
+set LogScriptsDir = "$LogDir/$ScptDir/$YearLong/$TODAY"
+set DumpDir = "$DumpDir/$ActualUser/$DwnlDir"
+set BinDir = "/home/$ActualUser/bin"
+set StopFile = STOPFILE
+
+#******************** Definizione delle variabili secondarie ********************
+set DtaSafeTime = 15:00 # 10 min. 0 sec.
+set FatSafeTime = 10:00 # 3 min. 0 sec.
+set SleepSafeTime = 10 # 10 sec.
+set Counts = 5 # Number of times $JOB tries to connect to remote receiver
+set DtaCounts = $Counts
+set FatCounts = $Counts
+set DtaSafeTime_sec = `echo "$DtaSafeTime" | gawk 'BEGIN {FS=":"} {if (NF == 3) print 3600*$1+60*$2+$3} {if (NF == 2) print 60*$1+$2} {if (NF == 1) print $1}'`
+set FatSafeTime_sec = `echo "$FatSafeTime" | gawk 'BEGIN {FS=":"} {if (NF == 3) print 3600*$1+60*$2+$3} {if (NF == 2) print 60*$1+$2} {if (NF == 1) print $1}'`
+set SleepSafeTime_sec = `echo "$SleepSafeTime" | gawk 'BEGIN {FS=":"} {if (NF == 3) print 3600*$1+60*$2+$3} {if (NF == 2) print 60*$1+$2} {if (NF == 1) print $1}'`
+set LocalSitesList=`ls -l $DumpDir | gawk '$1 ~/d/ && length($NF)==4 && $NF==toupper($NF) {print $NF}'`
+#set ActualMailsList = "david@mailserver.crs.ogs.trieste.it"
+set ActualMailsList = ""
+
+#******************** Programmi e scripts esterni ********************
+#PFset Dump_Program = sharc.$DataType # Modificato: set Sharc = 'sharc_daily'
+set Dump_Programs = (sharc.$DataType tdump ldump sdump rdump) #PF
+set PUT_FTP_Script = GPS_FTP_Put # Aggiunto
+set PUT_SFTP_Script = GPS_SFTP_Put
+set GET_RINEX_Script = GPS_Get_"$DataType"Rinex # Aggiunto #PF
+set Reset_Script = GPS_Reset
+set ReducingFile_Script = GPS_ReducingFile
+alias time /usr/bin/time
+alias TimeChecker /home/frednet/bin/TimeChecker
+
+#********************  File di configurazione ********************
+set Cfg_Brand = brand.cfg #PF
+#PFset Cfg_Dump_Program      = 'sharc.cfg' # Modificato: set CfgSharcName = 'sharc.cfg'
+set Cfg_Dump_Programs      = (sharc.cfg tdump.cfg ldump.cfg sdump.cfg rdump.cfg)#PF
+#PFset Cfg_Dump_Program_Skel = "sharc_skel.$DataType.cfg" # Modificato: set CfgSharcSkelName = 'sharc.cfg.skel' #Modificato per hourly vedi anche su GPS_Dump_DailyRaw
+set Cfg_Dump_Program_Skels = (sharc_skel.$DataType.cfg tdump_skel.$DataType.cfg ldump_skel.$DataType.cfg sdump_skel.$DataType.cfg rdump_skel.$DataType.cfg) #PF
+set Cfg_PUT_FTP_Script    = "ftp_upld.$DataType.cfg" # Modificato: set CfgUploadName = 'upload.cfg' #Modificato per hourly vedi anche su GPS_Dump_DailyRaw
+set Cfg_PUT_SFTP_Script = "sftp_upld.$DataType.cfg"
+
+#********************  File di log ********************
+set LogFileName = `date | gawk '{print "'"$JOB"'_" $1 "_" $2 "_" $3 "_" $4 "_" $5 ".log"}'` # modificato
+set FatFileName = 'site.fat'
+set SumFileName = 'site.sum'
+set DtaLogFileName = 'dta.log'
+set FatLogFileName = 'fat.log'
+set Log_GET_RINEX_Script = "$GET_RINEX_Script.log" # modificato set GetLogDataFileName = "$GET_RINEX_Script.log" # modificato
+set Log_PUT_FTP_Script   = "$PUT_FTP_Script.log" # modificato set FtpLogFileName = "$PUT_FTP_Script.log" # modificato
+set Log_PUT_SFTP_Script   = "$PUT_SFTP_Script.log"
+set DtaTimeFileName = 'dta.time'
+set FatTimeFileName = 'fat.time'
+
+
+#******************** Come usare lo script ********************
+set USAGE = "\n"
+set USAGE = "$USAGE""USAGE:"
+set USAGE = "$USAGE""\n""`basename $0` -d [DOYs list] | -h [Hours list] | -y [Years list] | -s [Sites list] | -m [Recp. list] | -a  | -uof | -uf | -noupld | -foupld | -tp | -at | -unpub "
+set USAGE = "$USAGE""\n"
+set USAGE = "$USAGE""\n""-d [DOYs  list] : list of Days Of the Year in Julian day format,"
+set USAGE = "$USAGE""\n""                  allowed values are 1 up to 356 (default is yesterday)."
+set USAGE = "$USAGE""\n""-h [Hours list] : list of GPS Hours of the selected DOYS, allowed values"
+set USAGE = "$USAGE""\n""                  are 01 up to 24 (default is one hour ago)."
+set USAGE = "$USAGE""\n""-y [Years list] : list of Years taken in account, allowed values are 2002"
+set USAGE = "$USAGE""\n""                  up to xxxx (default is the year of yesterday)."
+set USAGE = "$USAGE""\n""-s [Sites list] : list of sites taken in account (no defaults defined)."
+set USAGE = "$USAGE""\n""                  Allowed values are name composed by capital letters and"
+set USAGE = "$USAGE""\n""                  numbers. The size of the names must be 4 letters long."
+set USAGE = "$USAGE""\n""-m [Recp. list] : it sends, by e-mail, the $JOB log file"
+set USAGE = "$USAGE""\n""                  to the recipients in the list, without this option"
+set USAGE = "$USAGE""\n""                  $JOB doesn'tsend e-mails (now it sends"
+set USAGE = "$USAGE""\n""                  e-mails to dzuliani@inogs only)"
+set USAGE = "$USAGE""\n""-a              : automatic mode, $JOB takes the sites list"
+set USAGE = "$USAGE""\n""                  from local disk installed sites and use default options"
+set USAGE = "$USAGE""\n""                  (see above)."
+set USAGE = "$USAGE""\n""-at [alive time]: allowed alive time in seconds for $JOB, default is 800."
+set USAGE = "$USAGE""\n""-uof            : use old fat file. Without this option (by default)"
+set USAGE = "$USAGE""\n""                  $JOB always download the fat file from the"
+set USAGE = "$USAGE""\n""                  GPS receiver."
+set USAGE = "$USAGE""\n""                  Pay very attention using this option, when activated you"
+set USAGE = "$USAGE""\n""                  must be sure to have the most recent fat file on local"
+set USAGE = "$USAGE""\n""                  disk."
+set USAGE = "$USAGE""\n""-uf             : use fat for downloading data file by index number file."
+set USAGE = "$USAGE""\n""                  Without  this option (by default) $JOB"
+set USAGE = "$USAGE""\n""                  downloads data without checking if data is available or"
+set USAGE = "$USAGE""\n""                  not on the GPS receiver."
+set USAGE = "$USAGE""\n""-noupld         : do not send data to anyone (on the contrary data will be"
+set USAGE = "$USAGE""\n""                  uploaded using ftp)."
+set USAGE = "$USAGE""\n""-foupld         : force ftp uploads. By defaults $JOB uploads data only the"
+set USAGE = "$USAGE""\n""                  first time after a downloading session from a GPS receiver."
+set USAGE = "$USAGE""\n""-tp             : trasparent mode for handling data already downloaded."
+set USAGE = "$USAGE""\n""                  This mode doesn't support data downlaoding."
+set USAGE = "$USAGE""\n""                  first time after a downloading session from a GPS receiver."
+set USAGE = "$USAGE""\n""-red            : reducing file mode. This is used to set the Topcon GB-1000"     #DZ for the reducing file mode from line command
+set USAGE = "$USAGE""\n""                  to produce small data files By default no reducing mode is used"
+set USAGE = "$USAGE""\n""-unpub          : unpub  mode. Option to download data from stations whose RINEX"
+set USAGE = "$USAGE""\n""                  and RAW files must be saved in the UNPUB directory."
+set USAGE = "$USAGE""\n"
+
+if(! $#) then
+	echo "$USAGE"
+	exit 1
+endif
+
+#********************  Valori di default delle variabili di abilitazione scripts ********************
+set FTPOk = "Yes" # attenzione questa opzione � modificato da linea di comando usando il parametro -noupld
+set FTPFO = "No" # attenzione questa opzione � modificato da linea di comando usando il parametro -foupld
+set Unpub = ""
+set ErrorUsage = ""
+set ReadSites = "No"
+set ReadDOYs = "No"
+set ReadHours = "No"
+set ReadMails = "No"
+set AutoMode = "No"
+set UseOldFat = "No"
+set UseFat = "No"
+set TPMode = "No"
+set REDMode = "No"	#DZ for the reducing file mode from line command
+set ReadYears = "No"
+set ReadHours = "No"
+set ReadAliveTime = "No"
+set InitArg = "$argv[*]"
+set CommandLineDOYs = ""
+set CommandLineHours = ""
+set CommandLineSites = ""
+set CommandLineYears = ""
+set CommandLineMails = ""
+set CommandLineAliveTime = ""
+
+#******************** Lettura dei parametri da linea di comando ********************
+while($#)
+	switch($1)
+		case "-d":
+			shift
+			set CommandLineDOYs = `echo $1 | gawk '{if (length($0) == 1) print "00"$0} {if (length($0) == 2) print "0"$0} {if (length($0) == 3) print $0}'`
+			if (`echo "$1" | gawk '$0 ~/[0-9]+/ {print $0}' | gawk '{if ($0 ~/[^0-9+]/); else print $0}' | gawk '($0 >= 1) && ($0 <=366)'` != "") then
+			   set ReadDOYs = "Yes"
+                           set ReadAliveTime = "No"
+			   set ReadHours = "No"
+			   set ReadYears = "No"
+			   set ReadSites = "No"
+			   set ReadMails = "No"
+			else
+			   set ErrorUsage = "$ErrorUsage""Error -> $1 isn't a correct day of the year.\c"
+			endif
+			breaksw
+		case "-h":
+			shift
+			set CommandLineHours = $1
+			if (`echo "$1" | gawk '$0 ~/[0-9]+/ {print $0}' | gawk '{if ($0 ~/[^0-9+]/); else print $0}' | gawk '($0 >= 0) && ($0 <=24)'` != "") then
+			   set ReadHours = "Yes"
+                           set ReadAliveTime = "No"
+			   set ReadDOYs = "No"
+			   set ReadYears = "No"
+			   set ReadSites = "No"
+			   set ReadMails = "No"
+			else
+			   set ErrorUsage = "$ErrorUsage""Error -> $1 isn't a correct hour of the day.\c"
+			endif
+			breaksw
+		case "-y":
+			shift
+			set CommandLineYears = $1
+			if (`echo "$1" | gawk '$0 ~/[0-9]+/ {print $0}' | gawk '{if ($0 ~/[^0-9+]/); else print $0}' | gawk '($0 >= 2002) && (length($NF)==4)'` != "") then
+			   set ReadYears = "Yes"
+                           set ReadAliveTime = "No"
+			   set ReadDOYs = "No"
+			   set ReadHours = "No"
+			   set ReadSites = "No"
+			   set ReadMails = "No"
+			else
+			   set ErrorUsage = "$ErrorUsage""Error -> $1 isn't a correct year.\c"
+			endif
+			breaksw
+		case "-s":
+			shift
+			set CommandLineSites = "$1"
+			if (`echo $1 | gawk 'length($NF)==4 && $NF==toupper($NF) {print $NF}'` != "") then
+			   set ReadSites = "Yes"
+                           set ReadAliveTime = "No"
+			   set ReadHours = "No"
+			   set ReadYears = "No"
+			   set ReadDOYs = "No"
+			   set ReadMails = "No"
+			else
+			   set ErrorUsage = "$ErrorUsage""Error -> Sites list: [$CommandLineSites] isn't correct.\c"
+			endif
+			breaksw
+		case "-m":
+                        shift
+		     	set CommandLineMails = "$1"
+		        if (`echo $1 | gawk ' /@/ {print $NF}'` != "") then
+		           set ReadMails = "Yes"
+                           set ReadAliveTime = "No"
+			   set ReadHours = "No"
+			   set ReadYears = "No"
+			   set ReadSites = "No"
+			   set ReadDOYs = "No"
+		        else
+			   set ErrorUsage = "$ErrorUsage""Error -> Mail recipients list: [$CommandLineMails] isn't correct.\c"
+		        endif
+		        breaksw
+		case "-a":
+		        set AutoMode = "Yes"
+		        breaksw
+		case "-uof"
+		        set UseOldFat = "Yes"
+		        breaksw
+		case "-at":
+		     shift
+		     set CommandLineAliveTime = "$1"
+		     if (`echo "$1" | gawk '$0 ~/[0-9]+/ {print $0}' | gawk '{if ($0 ~/[^0-9+]/); else print $0}' | gawk '($0 >= 0)'` != "") then
+                        set ReadAliveTime = "Yes"
+			set ReadSites = "No"
+			set ReadYears = "No"
+			set ReadDOYs = "No"
+			set ReadHours = "No"
+		        set ReadMails = "No"
+		     else
+			set ErrorUsage = "$ErrorUsage""Error -> Alive Time: [$CommandLineSites] isn't correct.\c"
+		     endif
+		     breaksw
+		case "-uf"
+		     set UseFat = "Yes"
+		     breaksw
+		case "-noupld"
+		     set FTPOk = "No"
+		     breaksw
+		case "-foupld"
+		     set FTPFO = "Yes"
+		     breaksw
+		case "-tp"
+		     set TPMode = "Yes"
+		     breaksw
+		case "-red"
+		     set REDMode = "Yes" #DZ for the reducing file mode from line command
+		     breaksw
+                case "-unpub"
+                     set Unpub = "unpub"
+                     breaksw
+		default:
+		     if ("$ReadSites" == "Yes") then
+			set CommandLineSites = "$CommandLineSites $1"
+			if ("$ReadDOYs" == "Yes" | "$ReadMails" == "Yes" | "$ReadYears" == "Yes" | "$ReadHours" == "Yes") then
+			   set ErrorUsage = "$ErrorUsage""Error -> Generic error, parameters: $InitArg not valid. \c"
+			   breaksw
+			else
+                           if (`echo $1 | gawk 'length($NF)==4 && $NF==toupper($NF) {print $NF}'` != "") then
+			   else
+			      set ErrorUsage = "$ErrorUsage""Error -> Sites list: [$CommandLineSites] isn't correct.\c"
+			   endif
+			   breaksw
+			endif
+		     else
+		     endif
+		     if ("$ReadDOYs" == "Yes") then
+                        set PassDOY = `echo $1 | gawk '{if (length($0) == 1) print "00"$0} {if (length($0) == 2) print "0"$0} {if (length($0) == 3) print $0}'`
+			set CommandLineDOYs = "$CommandLineDOYs $PassDOY"
+			#set CommandLineDOYs = "$CommandLineDOYs $1"
+			if ("$ReadSites" == "Yes" | "$ReadMails" == "Yes" | "$ReadYears" == "Yes" | "$ReadHours" == "Yes") then
+			   set ErrorUsage = "$ErrorUsage""Error -> Generic error, parameters: $InitArg not valid. \c"
+			   breaksw
+			else
+			   if (`echo "$1" | gawk '$0 ~/[0-9]+/ {print $0}' | gawk '{if ($0 ~/[^0-9+]/); else print $0}' | gawk '($0 >= 1) && ($0 <=366)'` != "") then
+			   else
+			      set ErrorUsage = "$ErrorUsage""Error -> DOYs list: [$CommandLineDOYs] isn't correct.\c"
+			   endif
+			   breaksw
+			endif
+		     else
+		     endif
+		     if ("$ReadHours" == "Yes") then
+			set CommandLineHours = "$CommandLineHours $1"
+			if ("$ReadSites" == "Yes" | "$ReadMails" == "Yes" | "$ReadYears" == "Yes" | "$ReadDOYs" == "Yes") then
+			   set ErrorUsage = "$ErrorUsage""Error -> Generic error, parameters: $InitArg not valid. \c"
+			   breaksw
+			else
+			   if (`echo "$1" | gawk '$0 ~/[0-9]+/ {print $0}' | gawk '{if ($0 ~/[^0-9+]/); else print $0}' | gawk '($0 >= 1) && ($0 <=24)'` != "") then
+			   else
+			      set ErrorUsage = "$ErrorUsage""Error -> Hours list: [$CommandLineHours] isn't correct.\c"
+			   endif
+			   breaksw
+			endif
+		     else
+		     endif
+		     if ("$ReadYears" == "Yes") then
+			set CommandLineYears = "$CommandLineYears $1"
+			if ("$ReadDOYs" == "Yes" | "$ReadSites" == "Yes" | "$ReadMails" == "Yes" | "$ReadHours" == "Yes") then
+			   set ErrorUsage = "$ErrorUsage""Error -> Generic error, parameters: $InitArg not valid. \c"
+			   breaksw
+			else
+			   if (`echo "$1" | gawk '$0 ~/[0-9]+/ {print $0}' | gawk '{if ($0 ~/[^0-9+]/); else print $0}' | gawk '($0 >= 2002) && (length($NF)==4)'` != "") then
+			   else
+			      set ErrorUsage = "$ErrorUsage""Error -> $1 isn't a correct year.\c"
+			   endif
+			   breaksw
+			endif
+		     else
+		     endif
+		     if ("$ReadAliveTime" == "Yes") then
+			set CommandLineMails = "$CommandLineMails $1"
+			if ("$ReadSites" == "Yes" | "$ReadMails" == "Yes" | "$ReadHours" == "Yes") then
+			   set ErrorUsage = "$ErrorUsage""Error -> Generic error, parameters: $InitArg not valid. \c"
+			   breaksw
+			else
+			   if (`echo $1 | gawk ' /@/ {print $NF}'` != "") then
+			   else
+			      set ErrorUsage = "$ErrorUsage""Error -> Mail recipients list: [$CommandLineMails] isn't correct.\c"
+			   endif
+			   breaksw
+			endif
+		     else
+		     endif
+		     if ("$ReadMails" == "Yes") then
+			set CommandLineMails = "$CommandLineMails $1"
+			if ("$ReadDOYs" == "Yes" | "$ReadSites" == "Yes" | "$ReadYears" == "Yes" | "$ReadHours" == "Yes") then
+			   set ErrorUsage = "$ErrorUsage""Error -> Generic error, parameters: $InitArg not valid. \c"
+			   breaksw
+			else
+			   if (`echo $1 | gawk ' /@/ {print $NF}'` != "") then
+			   else
+			      set ErrorUsage = "$ErrorUsage""Error -> Mail recipients list: [$CommandLineMails] isn't correct.\c"
+			   endif
+			   breaksw
+			endif
+		     else
+		     endif
+	             breaksw
+	endsw
+	shift
+end
+
+if ("$ErrorUsage" != "") then
+    echo "Uncorrect command: `basename $0` $InitArg"
+    echo "$ErrorUsage"
+    echo ""
+    echo "$USAGE"
+    exit 1
+else
+   if ("$AutoMode" == "Yes") then
+      if ($CommandLineDOYs != "" | $CommandLineSites != "" | $ReadYears != "" | $CommandLineMails = "" | $CommandLineHours != "") then
+	 echo
+	 echo "Error -> parameter -a must be used alone."
+	 exit 1
+      else
+         echo
+	 echo "Auto mode is on: year is: $HOURNOW_YearLong, DOY: is $HOURNOW_DOY, Hours are: $CommandLineHours sites are: $LocalSitesList"
+	 set ActualSitesList = "$LocalSitesList"
+	 set ActualDOYsList = "$HOURNOW_DOY"
+	 set ActualHoursList = "$HOURNOW"
+	 set ActualYearsList = "$HOURNOW_Year"
+	 set ActualYearsLongList = "$HOURNOW_YearLong"
+      endif
+   else
+      if ("$CommandLineDOYs" == "") then
+	 set ActualDOYsList = "$HOURNOW_DOY"
+      else
+	 set ActualDOYsList = "$CommandLineDOYs"
+      endif
+      if ("$CommandLineHours" == "") then
+	 set ActualHoursList = "$HOURNOW"
+      else
+	 set ActualHoursList = "$CommandLineHours"
+      endif
+      if ("$CommandLineYears" == "") then
+	 set ActualYearsList = "$HOURNOW_Year"
+	 set ActualYearsLongList = "$HOURNOW_YearLong"
+      else
+	 set ActualYearsLongList = ($CommandLineYears)
+	 set ActualYearsList = `echo $ActualYearsLongList | gawk '{for (i=1; i<=NF; i++) {print substr($i,length($i)-1,2)}}'`
+      endif
+      if ("$CommandLineSites" == "") then
+	 set ActualSitesList = "$LocalSitesList"
+      else
+	 set ActualSitesList = "$CommandLineSites"
+      endif
+      if ("$CommandLineMails" == "") then
+      else
+	 set ActualMailsList = "$CommandLineMails"
+      endif
+      if ("$CommandLineAliveTime" == "") then
+         set ActualAliveTime = 800
+      else
+         set ActualAliveTime = "$CommandLineAliveTime"
+      endif
+      foreach CommandLineSite ($CommandLineSites)
+	      if (`echo "$LocalSitesList" | gawk '{for (i=1; i <= NF; i++) if ($i == "'"$CommandLineSite"'") print $i;}'` == "") then
+	         echo
+                 echo "Error -> The Command line Sites list: $CommandLineSites doesn't match the local Sites list: $LocalSitesList."
+                 exit 1
+	      else
+		set ActualSitesList = "$CommandLineSites"
+	      endif
+      end
+   endif
+   if ("$Unpub" == "unpub") then
+	#set DumpDir = '/data'
+	set RnxDir  = 'WORKDIR/UNPUB/rinex'
+	set RwDir   = 'WORKDIR/UNPUB/raw'
+	set RawDir   = "$DumpDir/$ActualUser/$RwDir"
+	set RinexDir = "$DumpDir/$ActualUser/$RnxDir"
+        #set DumpDir = "$DumpDir/$ActualUser/$DwnlDir"
+   endif
+endif
+
+set InitialSiteList = "$ActualSitesList"
+
+# Puliamo le varie directory dai file dat.log, fat.log dta.time, fat.time,
+# sharc.cfg, site.fat (di cui viene creata la copia site.fat.old.
+# che rimane nella directory del giorno). La site.fat su disco viene usata
+# dallo script nei passaggi superiori al primo solo se � impostata l'opezione -uef.
+# Se quest'ultima opzione non � attivata, lo script scarica la fat dal ricevitore
+# remoto e usa le informazioni ivi contenute per l'idendificazione del file raw
+# da scaricare.
+foreach Site ($InitialSiteList)
+
+   # Controlla il log della fat, se esite cancellalo
+   if (-e $DumpDir/$Site/$FatLogFileName ) then
+      rm $DumpDir/$Site/$FatLogFileName
+   endif
+   # Controlla la fat, se esite, controlla che non sia in uso
+   # per un download con l'opzione UseOldFat, e se � il caso
+   # spostala in un file di backup di estensione .old
+   if ( -e $DumpDir/$Site/$FatFileName) then
+      if ("$UseOldFat" == "No") then
+         mv "$DumpDir/$Site/$FatFileName" "$DumpDir/$Site/$FatFileName.old"
+      endif
+   endif
+   # Controlla il log time della fat, se esite cancellalo.
+   if ( -e $DumpDir/$Site/$FatTimeFileName) then
+      rm "$DumpDir/$Site/$FatTimeFileName"
+   endif
+   # Controlla il log dei dati scaricati (con sharc in questo caso),
+   # se esite cancellalo.
+   if ( -e $DumpDir/$Site/$DtaLogFileName ) then
+      rm $DumpDir/$Site/$DtaLogFileName
+   endif
+   # Controlla il log time dei dati scaricati, se esite cancellalo.
+   if ( -e $DumpDir/$Site/$DtaTimeFileName ) then
+      rm $DumpDir/$Site/$DtaTimeFileName
+   endif
+   # Controlla se il file di configurazione del programma di Dump
+   # (sharc in questo caso) � sul disco. Se � presente cancellalo.
+#PF   if ( -e $DumpDir/$Site/$Cfg_Dump_Program ) then
+   if ( -e $DumpDir/$Site/$Cfg_Dump_Programs[1] ) then           #PF presenza fil di config sharc
+      rm $DumpDir/$Site/$Cfg_Dump_Programs[1]
+   endif
+   if ( -e $DumpDir/$Site/$Cfg_Dump_Programs[2] ) then           #PF presenza fil di config tdump
+      rm $DumpDir/$Site/$Cfg_Dump_Programs[2]
+   endif
+   if ( -e $DumpDir/$Site/$Cfg_Dump_Programs[3] ) then           #PF presenza fil di config ldump
+      rm $DumpDir/$Site/$Cfg_Dump_Programs[3]
+   endif
+   if ( -e $DumpDir/$Site/$Cfg_Dump_Programs[4] ) then           #PF presenza fil di config sdump
+      rm $DumpDir/$Site/$Cfg_Dump_Programs[4]
+   endif
+    if ( -e $DumpDir/$Site/$Cfg_Dump_Programs[5] ) then          #PF presenza fil di config rdump
+      rm $DumpDir/$Site/$Cfg_Dump_Programs[5]
+   endif
+   # Controlla se il file di log del programma di conversione
+   # � sul disco. Se � presente cancellalo.
+   if ( -e $DumpDir/$Site/$Log_GET_RINEX_Script ) then
+      rm $DumpDir/$Site/$Log_GET_RINEX_Script
+   endif
+   # Controlla se il file di log del programma di upload
+   # (un script che fa l'FTP su macchine remote) � sul disco. Se � presente cancellalo.
+   if ( -e $DumpDir/$Site/$Log_PUT_FTP_Script ) then
+      rm $DumpDir/$Site/$Log_PUT_FTP_Script
+   endif
+end
+
+# *************************** L'intestazione del file di LOG *********************************
+if ( ! -e $LogScriptsDir/$LogFileName ) then
+   mkdir -p $LogScriptsDir
+   touch $LogScriptsDir/$LogFileName
+endif
+
+echo "----------------------- $JOB log file -------------------------" >> "$LogScriptsDir/$LogFileName"
+echo "" >> "$LogScriptsDir/$LogFileName"
+echo "Date: `date`" >> "$LogScriptsDir/$LogFileName"
+echo "Years Of the year list: $ActualYearsLongList" >> "$LogScriptsDir/$LogFileName"
+echo "Days Of the day list: $ActualDOYsList" >> "$LogScriptsDir/$LogFileName"
+echo "Hours Of the hour list: $ActualHoursList" >> "$LogScriptsDir/$LogFileName"
+echo "Sites list: $ActualSitesList" >> "$LogScriptsDir/$LogFileName"
+echo "" >> "$LogScriptsDir/$LogFileName"
+
+
+#Controllo se esiste il file di Stop per dare precedenza a GPS_Dump_HF
+#Se esiste, lo scrivo sul log ed esco, altrimenti scrivo che non esiste e vado avanti
+if ( -e /home/frednet/$StopFile) then
+	echo "GPS_Dump_HF: $StopFile exist " >> "$LogScriptsDir/$LogFileName"
+	exit
+else
+	echo "GPS_Dump_HF: $StopFile does not exist. Go on!" >> "$LogScriptsDir/$LogFileName"
+	echo "" >> "$LogScriptsDir/$LogFileName"
+endif
+
+
+# ********************************* Qui inizia il ciclo principale ***********************************
+set CountYear = 1
+
+while ($CountYear <= $#ActualYearsLongList)
+   set YearLong = $ActualYearsLongList[$CountYear]
+   set Year = $ActualYearsList[$CountYear]
+   echo "" >> "$LogScriptsDir/$LogFileName"
+   echo "----------------------- Year: $YearLong -------------------------" >> "$LogScriptsDir/$LogFileName"
+   echo "" >> "$LogScriptsDir/$LogFileName"
+   @ CountYear++
+   foreach DOY ($ActualDOYsList)
+      echo "" >> "$LogScriptsDir/$LogFileName"
+      echo "----------------------- DOY: $DOY -------------------------" >> "$LogScriptsDir/$LogFileName"
+      echo "" >> "$LogScriptsDir/$LogFileName"
+      foreach HOUR ($ActualHoursList)
+	  set SessionType = `echo $HOUR | hr2ses`
+          set HOURONDISK = `echo "$HOUR" | gawk ' {if (length($0) <=1) print 0$0; else print $0}'`
+	  set uses = `echo $SessionType | tr 'a-z' 'A-Z'` # session -> SESSION
+          set lses = `echo $SessionType | tr 'A-Z' 'a-z'` # SESSION -> session
+          set ActualSitesList = "$InitialSiteList"
+          echo "" >> "$LogScriptsDir/$LogFileName"
+          echo "----------------------- HOUR: $HOURONDISK -------------------------" >> "$LogScriptsDir/$LogFileName"
+          echo "" >> "$LogScriptsDir/$LogFileName"
+          top:
+          # se il disco locale � pieno scrivi il messaggio nel file di log ed esci
+          if (`df "$DumpDir" | gawk '$4 ~/[0-9]+/ {print $4}' | gawk '{if ($0 ~/[^0-9+]/); else print $0}' | gawk '($0 <= 2000)'` != "") then
+             echo "Local disk full aborting download" >> "$LogScriptsDir/$LogFileName"
+             set ActualSitesList = ""
+             if ( $ActualMailsList != "") then
+                cat "$LogScriptsDir/$LogFileName" | mailx "$ActualMailsList"
+             else
+                cat "$LogScriptsDir/$LogFileName"
+             endif
+          else
+          endif
+          while ("$ActualSitesList" != "")
+             foreach Site ($ActualSitesList)
+                set BrandDir = $DumpDir/$Site/$Cfg_Brand                                        #PF
+                set Brand = `cat $BrandDir | awk '! /#/ { if ($1 == "BRAND" )   print  $3 }  '` #PF
+                if ("$Brand" == "L") then
+                   set Dump_Program =  $Dump_Programs[3]                  #PF
+                   set Cfg_Dump_Program = $Cfg_Dump_Programs[3]           #PF set per ricevitore leica
+                   set Cfg_Dump_Program_Skel = $Cfg_Dump_Program_Skels[3] #PF
+                   set FileType = 'L'                                     #PF
+		endif
+                if ("$Brand" == "T") then
+                   set Dump_Program =  $Dump_Programs[2]                  #PF
+                   set Cfg_Dump_Program = $Cfg_Dump_Programs[2]           #PF set per ricevitore topcon
+                   set Cfg_Dump_Program_Skel = $Cfg_Dump_Program_Skels[2] #PF
+                   set FileType = 'T'                                     #PF
+		   if ($REDMode == "Yes") then				  #DZ per il controllo sul Reducing file mode da linea di comando
+        	   	#$ReducingFile_Script -s $Site                       			#PF Vecchio script per settare il ricevitore e ottenere una dimensione ridotta del file
+			#GPS_Topcon_Script  -s $Site  -fin Set_Reducing_file_size.gril		#PF Nuovo script per settare il ricevitore e ottenere una dimensione ridotta del file
+												#GPS_Topcon_Script (linea precedente) Commentato il 2014.07.10
+			GPS_Topcon_Crontab -s $Site
+		   endif
+		endif
+                if ("$Brand" == "S") then
+                   set Dump_Program =  $Dump_Programs[4]                  #PF
+                   set Cfg_Dump_Program = $Cfg_Dump_Programs[4]           #PF set per ricevitore stonex
+                   set Cfg_Dump_Program_Skel = $Cfg_Dump_Program_Skels[4] #PF
+                   set FileType = 'S'                                     #PF
+		endif
+		if   ("$Brand" == "U") then                               #PF
+                  set Dump_Program = $Dump_Programs[1]                    #PF
+                  set Cfg_Dump_Program = $Cfg_Dump_Programs[1]            #PF set per ricevitore ashtech
+                  set Cfg_Dump_Program_Skel = $Cfg_Dump_Program_Skels[1]  #PF
+                  set FileType = 'U'
+                endif
+                if ("$Brand" == "R") then
+                   set Dump_Program =  $Dump_Programs[5]                  #PF
+                   set Cfg_Dump_Program = $Cfg_Dump_Programs[5]           #PF set per ricevitore trimble
+                   set Cfg_Dump_Program_Skel = $Cfg_Dump_Program_Skels[5] #PF
+                   set FileType = 'R'                                     #PF
+		endif
+                set now=`date +"%Y-%m-%d %H-%M-%S" `
+                if (! -e $HOME/var/run/) then
+                   mkdir -p $HOME/var/run/
+                   echo "$JOB : $now : $HOME/var/run/ created." >> "$LogScriptsDir/$LogFileName"
+                else
+                   echo "$JOB : $now : $HOME/var/run/ already exist." >> "$LogScriptsDir/$LogFileName"
+                endif
+                set PID=$HOME/var/run/$JOB.$Site.pid
+                # check if the same script is already running
+                # for the same site and kill it if necessary
+                if(-e $PID) then
+                  set KILLFAILED="OK"
+                  set PIDFATHER = `cat $PID`
+                  # se il pid sul file e quello attuale sono uguali lascia perdere
+                  # altrimenti elimina il processo con il PID equivalente a quello
+                  # trovato nel file
+                  if  (`ps -ef | gawk -v pid_file=$PIDFATHER -v pid_main=$$ '{if ($2==pid_file && pid_main!=pid_file) print $0}' | wc -l`) then
+                      echo "$JOB - killing previous" >> "$LogScriptsDir/$LogFileName"
+                      kill_family $PIDFATHER >> "$LogScriptsDir/$LogFileName"
+                      # lo script deve essere capace di killare un processo e tutti i
+                      # suoi figli, il kill -9 non funziona perch� appena uccido il padre
+                      # di TimeChecker, TimeChecker diventa il figlio del processo 1
+                      # set PIDS2DEL = ($PIDFATHER `ps -ef | gawk -v pid_father=$PIDFATHER '{if ($3==pid_father) print $2}'`)
+                      # echo  "la lista �: "
+                      # ps -ef | gawk -v pid_father=$PIDFATHER '{if ($3==pid_father) print $0}'
+                      #foreach PID2DEL ($PIDS2DEL)
+                      #   if  (`ps -ef | gawk -v pid2del=$PID2DEL '{if ($2==pid2del) print $0}' | wc -l`) then
+                      #       echo "I'm killing $PID2DEL"
+                      #       (kill -9 $PID2DEL)
+                      # if ($?) then
+                      #   set KILLFAILED="failed"
+                      # else
+                      # endif
+                      #echo "$JOB - killing previous" >> "$LogScriptsDir/$LogFileName"
+                      #echo "$JOB : $now : killed previuos instance - $KILLFAILED" >> "$LogScriptsDir/$LogFileName"
+                      #echo"" >> "$LogScriptsDir/$LogFileName"
+                      #   else
+                      #      echo "$PID2DEL has been killed yet"
+                      #   endif
+                      #end
+                  else
+                     echo "$JOB : $now : no other JOBS active with pid number: $$." >> "$LogScriptsDir/$LogFileName"
+                  endif
+                  #set tmp=`mktemp /tmp/${JOB}.XXXXXX`
+                endif
+                echo "$$" > $PID
+
+                # for controlling the alive time of the JOB
+                set NowTime = `date +%s`
+                @ RemainingTime = $NowTime - $StarTime
+
+                @ AtTime = $ActualAliveTime - $RemainingTime[1]
+                echo "Remaining	Time: --> $RemainingTime[1] s"
+                echo "Alive	Time: --> $AtTime s"
+                echo ""
+
+                # exit for exceeded alive time of the JOB
+                if ($RemainingTime >= $ActualAliveTime) then
+                   echo "$JOB : $now : Job time out exceeded EXITING." >> "$LogScriptsDir/$LogFileName"
+                   rm -f $PID
+                   exit 4
+                endif
+
+                #if ($ActualAliveTime <= 0) then
+                #   rm -f $PID
+                #   echo "$JOB : $now : Job time out exceeded EXITING." >> "$LogScriptsDir/$LogFileName"
+                #   exit 4
+                #endif
+                # se il file di configurazione (di default � lo scheletro del file) �
+                # presente vai avanti altrimenti elimina il sito dalla lista
+                set filerinex =  ""
+                #set filerinex =  `ls $RinexDir/$YearLong/$DOY/$HOURONDISK/${Site}*_01H_30S_MO.rnx.gz`
+                if ( -e $DumpDir/$Site/$Cfg_Dump_Program_Skel ) then
+                   set lcsite = `echo $Site | tr 'A-Z' 'a-z'` # SITE -> site
+	           # se il file giornaliero � gi� sul disco convertilo usando GET_RINEX_Script
+                   # ed elimina il sito dalla lista altrimenti vai avanti
+                   #if ((-e $DumpDir/$Site/$DataType/$FileType$Site$SessionType$Year.$DOY) || (-e $RinexDir/$YearLong/$DOY/$HOURONDISK/$lcsite${DOY}$lses.${Year}d.Z)) then
+		    if (( -e $DumpDir/$Site/$DataType/$FileType$Site$SessionType$Year.$DOY)) then 
+		       if ("$Brand" == "T" || "$Brand" == "L" || "$Brand" == "S" || "$Brand" == "R") then
+		   	 #se il ricevitore � di tipo Leica o Topcon o comunque con comunicazione GPRS
+			 #controllo che la dimensione del file presente sul disco sia pari almeno al 90%
+		   	 #della dimensione del file presente sul ricevitore
+		   	 set DownSize  = `ls -l $DumpDir/$Site/$DataType/$FileType$Site$SessionType$Year.$DOY | gawk '{print $5}'`
+                   	 set RealSize  = `cat  $DumpDir/$Site/telnet.$Site.TIDY.fat | grep $FileType$Site$SessionType$Year.$DOY | gawk '{print $3}'| sort -nr | gawk 'NR==1 {print $1}'` #PF 2015.01.07
+                   	 set Tolerance = ` expr $RealSize / 10 `
+		   	 set DiffSize  = `expr $RealSize - $Tolerance` #PF
+                   	 if ( $DownSize > $DiffSize ) then #se � verificato procedo
+		       	    set lcsessiontype = `echo $SessionType | tr 'A-Z' 'a-z'` # SITE -> site
+                      	    set ActualSitesList = `echo "$ActualSitesList" | gawk '{for (i = 1; i <= NF; i++) if ($i == "'"$Site"'") {$i = ""; print $0}}'`
+                     	 else                                      #se non � verificato cancello tutti i file rinex generati e il file grezzo e i file in reget
+		       	    set lcsessiontype = `echo $SessionType | tr 'A-Z' 'a-z'` # SITE -> site
+                            set CODE = `date +%d_%m_%Y`
+			    cp $DumpDir/$Site/telnet.$Site.TIDY.fat /home/frednet/WorkPaolo/TMP/DIMENSIONERAW/telnet.$SessionType.$Year.$DOY.$Site.TIDY.$CODE.fat
+			    cp $DumpDir/$Site/telnet.$Site.fat /home/frednet/WorkPaolo/TMP/DIMENSIONERAW/telnet.$SessionType.$Year.$DOY.$Site.$CODE.fat
+			    rm $DumpDir/$Site/$DataType/$FileType$Site$SessionType$Year.$DOY
+		            rm $RinexDir/$YearLong/$DOY/$HOURONDISK/$lcsite${DOY}$lses.${Year}?.Z
+		            rm /data/frednet/FTP_Data/rinex_1s/$YearLong/$DOY/$HOURONDISK/$lcsite${DOY}$lses.${Year}?.Z #PF 2010_09_21_rimozione file 1s se dimensioni del file sono inferiori al 90%
+			    rm $RawDir/$YearLong/$DOY/$HOURONDISK/$FileType$Site$SessionType$Year.$DOY
+		            rm $DumpDir/$Site/$DataType/reget/$lcsite$DOY$lcsessiontype.$Year*
+		            rm $DumpDir/$Site/$DataType/reget_1s/$lcsite$DOY$lcsessiontype.$Year*
+		         endif
+		      endif
+		      # usa GET_RINEX_Script per convertire il file da RAW a RINEX.
+                      # Sar� compito di GET_RINEX_Script gestire il fatto che il
+		      # file sia gi� stato convertito o meno
+          	      $GET_RINEX_Script $Site $DOY $HOURONDISK $YearLong $Unpub > $DumpDir/$Site/$Log_GET_RINEX_Script
+          	      # sessione FTP
+          	      # lcsite � necessario perch� i file compressi hanno tutti nomi con lettere minsucole
+          	      # prima di processare la routine di FTP si fa un controllo per vedere se il sito in questione � nella
+          	      # lista di quelli abilitati ($FTP_List)all'upload dei data
+          	      if ($FTPOk == "Yes") then
+          	         if (-e $DumpDir/$Site/$Cfg_PUT_FTP_Script) then
+                            set NumRec = `cat $DumpDir/$Site/$Cfg_PUT_FTP_Script | awk ' ! /#/ {print $0}' | gawk 'END{print NR}'`
+                            set Rec = 1
+                            while ($Rec <= $NumRec)
+                                  set RECORD=`cat $DumpDir/$Site/$Cfg_PUT_FTP_Script | awk ' ! /#/ {print $0}' | gawk '{if (NR == "'$Rec'") print $0}'`
+                                  set REMOTE_MACHINE  = `echo $RECORD[1]` >& /dev/null
+                                  set REMOTE_USER = `echo $RECORD[2]` >& /dev/null
+                                  set REMOTE_PASSWORD = `echo $RECORD[3]` >& /dev/null
+                                  set REMOTE_DIR = `echo $RECORD[4]` >& /dev/null
+                                  if ($#RECORD == 5) then
+                                     set FILE_TYPE = `echo $RECORD[5]` >& /dev/null
+          		          endif
+          		          @ Rec++
+          		          if ($#RECORD == 5) then
+                                     #2024.03if (-e $RinexDir/$YearLong/$DOY/$HOURONDISK/$lcsite${DOY}$lses.${Year}d.Z | -e $RinexDir/$YearLong/$DOY/$HOURONDISK/$lcsite${DOY}$lses.${Year}o.Z) then
+				     set FtpFileList = `ls $RinexDir/$YearLong/$DOY/$HOURONDISK/$Site*.crx.gz | gawk ' { print $0}'`
+				     if ( "$FtpFileList" != "") then
+                                        # forcing ftps when a Rinex file was previously present on disk
+                                        if ($FTPFO == "Yes") then
+                                           #set FtpFileList = `ls $RinexDir/$YearLong/$DOY/$HOURONDISK/$lcsite${DOY}$lses.${Year}?.Z | gawk 'BEGIN{FS="."} {if (match("'"$FILE_TYPE"'",substr($2,3,1))) print $0}'`
+                                           set FtpFileList = `ls $RinexDir/$YearLong/$DOY/$HOURONDISK/$Site*.crx.gz | gawk ' { print $0}'`
+					   echo "- Uploads to $REMOTE_MACHINE for user $REMOTE_USER" >> "$DumpDir/$Site/$Log_PUT_FTP_Script"
+                                           $PUT_FTP_Script -m "$REMOTE_MACHINE" -u $REMOTE_USER -p $REMOTE_PASSWORD -rd $REMOTE_DIR -f $FtpFileList >> "$DumpDir/$Site/$Log_PUT_FTP_Script"
+                                        else
+                                           echo "- No uploading needed for $Site site. Rinex data previously present on disk" >> "$DumpDir/$Site/$Log_PUT_FTP_Script"
+                                        endif
+                                     else
+          		                echo "$RinexDir/$YearLong/$DOY/$HOURONDISK/$lcsite${DOY}$lses.${Year}d.Z not on disk, impossible to upload the file to the $REMOTE_MACHINE machine" >> "$DumpDir/$Site/$Log_PUT_FTP_Script"
+          	                     endif
+          		          else
+          		             echo "- No uploading needed to $REMOTE_MACHINE for user $REMOTE_USER according the config file $DumpDir/$Site/$Cfg_PUT_FTP_Script for $Site site" >> "$DumpDir/$Site/$Log_PUT_FTP_Script"
+          		          endif
+          		    end
+		         else
+          	            echo "No $DumpDir/$Site/$Cfg_PUT_FTP_Script on disk. No data uploaded for $Site site" >> "$DumpDir/$Site/$Log_PUT_FTP_Script"
+          	         endif
+			if (-e $DumpDir/$Site/$Cfg_PUT_SFTP_Script) then
+                            set NumRec = `cat $DumpDir/$Site/$Cfg_PUT_SFTP_Script | awk ' ! /#/ {print $0}' | gawk 'END{print NR}'`
+                            set Rec = 1
+                            while ($Rec <= $NumRec)
+                                  set RECORD=`cat $DumpDir/$Site/$Cfg_PUT_SFTP_Script | awk ' ! /#/ {print $0}' | gawk '{if (NR == "'$Rec'") print $0}'`
+                                  set REMOTE_MACHINE  = `echo $RECORD[1]` >& /dev/null
+                                  set REMOTE_USER = `echo $RECORD[2]` >& /dev/null
+                                  set REMOTE_PORT = `echo $RECORD[3]` >& /dev/null
+                                  set REMOTE_DIR = `echo $RECORD[4]` >& /dev/null
+                                  if ($#RECORD == 5) then
+                                    set FILE_TYPE = `echo $RECORD[5]` >& /dev/null
+          		          endif
+          		          @ Rec++
+          		          if ($#RECORD == 5) then
+				     set FtpFileList = `ls $RinexDir/$YearLong/$DOY/$HOURONDISK/$Site*.crx.gz | gawk ' { print $0}'`
+                                     #if (-e $RinexDir/$YearLong/$DOY/$HOURONDISK/$lcsite${DOY}$lses.${Year}d.Z | -e $RinexDir/$YearLong/$DOY/$HOURONDISK/$lcsite${DOY}$lses.${Year}o.Z) then
+                                     if ( "$FtpFileList" != "") then
+					# forcing ftps when a Rinex file was previously present on disk
+                                        if ($FTPFO == "Yes") then
+                                           #2024.03set FtpFileList = `ls $RinexDir/$YearLong/$DOY/$HOURONDISK/$lcsite${DOY}$lses.${Year}?.Z | gawk 'BEGIN{FS="."} {if (match("'"$FILE_TYPE"'",substr($2,3,1))) print $0}'`
+                                           #ls /data/frednet/FTP_Data/rinex_1s/2024/072/22/ACOM*.crx.gz | gawk '{ print $0}'
+					   set FtpFileList = `ls $RinexDir/$YearLong/$DOY/$HOURONDISK/$Site*.crx.gz | gawk ' { print $0}'`
+					   echo "- Uploads to $REMOTE_MACHINE for user $REMOTE_USER" > "$DumpDir/$Site/$Log_PUT_SFTP_Script"
+                                           $PUT_SFTP_Script -m "$REMOTE_MACHINE" -u $REMOTE_USER -p $REMOTE_PORT -rd $REMOTE_DIR -f $FtpFileList >> "$DumpDir/$Site/$Log_PUT_SFTP_Script"
+                                        else
+                                           echo "- No uploading needed for $Site site. Rinex data previously present on disk" > "$DumpDir/$Site/$Log_PUT_SFTP_Script"
+                                        endif
+                                     else
+          		                echo "$RinexDir/$YearLong/$DOY/$HOURONDISK/$lcsite${DOY}$lses.${Year}d.Z not on disk, impossible to upload the file to the $REMOTE_MACHINE machine" > "$DumpDir/$Site/$Log_PUT_SFTP_Script"
+          	                     endif
+          		          else
+          		             echo "- No uploading needed to $REMOTE_MACHINE for user $REMOTE_USER according the config file $DumpDir/$Site/$Cfg_PUT_SFTP_Script for $Site site" > "$DumpDir/$Site/$Log_PUT_SFTP_Script"
+          		          endif
+          		    end
+		         else
+          	            echo "No $DumpDir/$Site/$Cfg_PUT_SFTP_Script on disk. No data uploaded for $Site site" > "$DumpDir/$Site/$Log_PUT_SFTP_Script"
+          	         endif
+
+                      endif
+                      # se il file di log del file di dati � su disco
+                      # cerca una riga con la scritta "Already on disk"
+          	      # se non esite tale riga creala, altrimenti crea il
+                      # file di log con quella riga
+                      if ( -e $DumpDir/$Site/$DtaLogFileName ) then
+          	         # se la frase Already on disk � presente nel file di log salta al passo succesivo, altrimenti
+          	         # crea il file di log con quella frase
+          	         echo "il file di log � presente per $FileType$Site$SessionType$Year.$DOY"
+          	         if (`gawk '$0 ~"Already on disk" {print $0}' "$DumpDir/$Site/$DtaLogFileName"` != "") then
+          	            #echo la scritta Already on disk � presente sul file dta.log
+          	         else
+          	            #echo la scritta Already on disk non � presente
+          	            echo "File $FileType$Site$SessionType$Year.$DOY already on disk" >> "$DumpDir/$Site/$DtaLogFileName"
+          	         endif
+          	      else
+          	         #echo "il file di log non � presente"
+                         if (-e $DumpDir/$Site/$DataType/$FileType$Site$SessionType$Year.$DOY) then
+                            echo "File $FileType$Site$SessionType$Year.$DOY already on disk" >  "$DumpDir/$Site/$DtaLogFileName"
+                         else
+                            echo "File $FileType$Site$SessionType$Year.$DOY not on disk" >  "$DumpDir/$Site/$DtaLogFileName"
+                         endif
+          	         echo "File $FileType$Site$SessionType$Year.$DOY already on disk" >  "$DumpDir/$Site/$DtaLogFileName"
+          	      endif
+                      set ActualSitesList = `echo "$ActualSitesList" | gawk '{for (i = 1; i <= NF; i++) if ($i == "'"$Site"'") {$i = ""; print $0}}'`
+                   else
+	              # condizione con l'if per decidere se usare la fat o meno
+	              if ($UseFat == "Yes") then
+	                 # fai attenzione che questa opzione deve interessare sia il download della
+                         # fat che quella del dato (che non user� pi� il numero d'indice ma
+	                 # la data esatta del file GPS registrato sulla memoria del ricevitore
+                         # se la fat � su disco vai avanti e controlla che sia esatta e poi scarica
+                         # il file, se non � presente sul disco scaricala dal sito
+                         if ( -e $DumpDir/$Site/$FatFileName ) then
+          	            # se la fat � vuota aggiungi il commento "empty fat" al file di log della
+                            # fat altrimenti vai avanti
+          	            if (`gawk '$0 ~"'"$Site"'" {print $0}' "$DumpDir/$Site/$FatFileName"` != "") then
+          	               # se il file � nella lista del ricevitore vai avanti altrimenti scrivi il commento "file ...
+          	               # not on receiver" al log del data file
+          	               if (`gawk '$2 == "'"$FileType$Site$SessionType$Year.$DOY"'" {print $1}' "$DumpDir/$Site/$FatFileName"` != "") then
+          	                  # se il file da scaricare � attualmente in fase di acquisione rimuovi il sito dalla
+          		          # lista e aggiungi il commento "File on recording, ... not to download" al file di
+          		          # log della fat altrimenti esci aggiungi il commento "Fat file correct for ... site
+          		          # al log della fat e vai al download del file.
+          		          if (`gawk '$8 ~"*" {print $2}' "$DumpDir/$Site/$FatFileName"` == "$FileType$Site$SessionType$Year.$DOY") then
+          		             echo "File $FileType$Site$SessionType$Year.$DOY on recording, not to download" >> "$DumpDir/$Site/$DtaLogFileName"
+          		             set ActualSitesList = `echo "$ActualSitesList" | gawk '{for (i = 1; i <= NF; i++) if ($i == "'"$Site"'") {$i = ""; print $0}}'`
+          		             goto top
+          		          else
+          		             set IndexNumber = `gawk '$2 == "'"$FileType$Site$SessionType$Year.$DOY"'" {print $1}' "$DumpDir/$Site/$FatFileName"`
+          	                     # Se il file di log della fat � su disco, controlla che tra le sue righe compaia la
+          		             # scritta "Fat file correct for ... site"
+          		             # altrimenti crea il file di log della fat con la scritta  "Fat file correct for ... site"
+          		             if ( -e $DumpDir/$Site/$FatLogFileName ) then
+          		                if (`gawk '$0 ~"Fat file correct for '"$Site"' site" {print $0}' "$DumpDir/$Site/$FatLogFileName"` == "") then
+          		                   echo "Fat file correct for $Site site" >> "$DumpDir/$Site/$FatLogFileName"
+          		                else
+          		                endif
+          		             else
+          		                echo "Fat file correct for $Site site" >> "$DumpDir/$Site/$FatLogFileName"
+          		             endif
+          		             goto download_data
+          		          endif
+          	               else
+          	                  echo "File $FileType$Site$SessionType$Year.$DOY not on receiver" >> "$DumpDir/$Site/$DtaLogFileName"
+          		          set ActualSitesList = `echo "$ActualSitesList" | gawk '{for (i = 1; i <= NF; i++) if ($i == "'"$Site"'") {$i = ""; print $0}}'`
+          	                  goto top
+          	               endif
+          	            else
+          	               # echo "la fat di $Site � vuota"
+          	               cp "$DumpDir/$Site/$FatFileName" "$DumpDir/$Site/$FatFileName.old"
+          	               set ActualSitesList = `echo "$ActualSitesList" | gawk '{for (i = 1; i <= NF; i++) if ($i == "'"$Site"'") {$i = ""; print $0}}'`" $Site"
+          	               goto download_fat
+          	            endif
+          	            goto download_data
+                         else
+                            goto download_fat
+                         endif
+	              else
+	                 # sar� un download senza l'utilizzo della fat
+	                 goto download_data
+	              endif
+	              #******************************************************************** fine dell'endif ****************************************************
+                   endif
+                else
+                   echo "Site $Site isn't active yet" > "$DumpDir/$Site/$DtaLogFileName"
+                   set ActualSitesList = `echo "$ActualSitesList" | gawk '{for (i = 1; i <= NF; i++) if ($i == "'"$Site"'") {$i = ""; print $0}}'`
+                endif
+             rm -f $PID
+             end
+          end
+          # Cancellare tutti i file di: log, tempo, fat per ogni sito e creare un unica copia di log con un nome
+          # file che faccia riferimento alla data (ora compresa) in cui si � tentato il download
+          foreach Site ($InitialSiteList)
+             # cd $DumpDir/$Site
+             set BrandDir = $DumpDir/$Site/$Cfg_Brand                                           #PF
+             set Brand = `cat $BrandDir | awk '! /#/ { if ($1 == "BRAND" )   print  $3 }  '`    #PF
+             if ("$Brand" == "U") then                                                          #PF
+                set FileType = 'U'                                                              #PF
+             endif  										#PF
+             if ("$Brand" == "T") then                                                          #PF
+                set FileType = 'T'                                                              #PF
+             endif	                                                                        #PF
+             if ("$Brand" == "L") then                                                          #PF
+                set FileType = 'L'                                                              #PF
+             endif
+            if ("$Brand" == "S") then                                                          #PF
+                set FileType = 'S'                                                              #PF
+             endif
+            if ("$Brand" == "R") then                                                          #PF
+                set FileType = 'R'                                                              #PF
+             endif
+
+	     if ( ! -e $LogScriptsDir ) then
+	        mkdir -p $LogScriptsDir
+	    	touch $LogScriptsDir/$LogFileName
+	     endif
+             echo "" >> "$LogScriptsDir/$LogFileName"
+             echo "Log section of $Site site for "$FileType$Site$SessionType$Year.$DOY" file downloading" >> "$LogScriptsDir/$LogFileName"
+             echo "" >> "$LogScriptsDir/$LogFileName"
+             echo "Fat section:" >> "$LogScriptsDir/$LogFileName"
+             if ( ! -e $DumpDir/$Site/$FatLogFileName) then
+                echo "$FatLogFileName not present for $Site site." >> "$LogScriptsDir/$LogFileName"
+             else
+                gawk '{print $0}' "$DumpDir/$Site/$FatLogFileName" >> "$LogScriptsDir/$LogFileName"
+                rm "$DumpDir/$Site/$FatLogFileName"
+             endif
+             if ( ! -e $DumpDir/$Site/$FatFileName ) then
+                echo "$FatFileName not present for $Site site." >> "$LogScriptsDir/$LogFileName"
+             else
+                echo "$FatFileName on disk for $Site site." >> "$LogScriptsDir/$LogFileName"
+             endif
+             if ( ! -e $DumpDir/$Site/$FatTimeFileName ) then
+                echo "$FatTimeFileName not present for $Site site." >> "$LogScriptsDir/$LogFileName"
+             else
+                rm "$DumpDir/$Site/$FatTimeFileName"
+             endif
+             echo "" >> "$LogScriptsDir/$LogFileName"
+             echo "Data section:" >> "$LogScriptsDir/$LogFileName"
+             if ( ! -e $DumpDir/$Site/$DtaLogFileName ) then
+                echo "$DtaLogFileName not present for $Site site." >> "$LogScriptsDir/$LogFileName"
+             else
+                gawk '{print $0}' "$DumpDir/$Site/$DtaLogFileName" >> "$LogScriptsDir/$LogFileName"
+                rm "$DumpDir/$Site/$DtaLogFileName"
+             endif
+             if ( ! -e $DumpDir/$Site/$DtaTimeFileName ) then
+             else
+                rm "$DumpDir/$Site/$DtaTimeFileName"
+             endif
+             if ( ! -e $DumpDir/$Site/$Cfg_Dump_Program ) then
+                echo "$Cfg_Dump_Program not present for $Site site." >> "$LogScriptsDir/$LogFileName"
+             else
+                rm "$DumpDir/$Site/$Cfg_Dump_Program"
+             endif
+             echo "" >> "$LogScriptsDir/$LogFileName"
+             echo "Translation section:" >> "$LogScriptsDir/$LogFileName"
+             if ( ! -e $DumpDir/$Site/$Log_GET_RINEX_Script ) then
+                echo "$Log_GET_RINEX_Script not present for $Site site." >> "$LogScriptsDir/$LogFileName"
+             else
+                gawk '{print $0}' "$DumpDir/$Site/$Log_GET_RINEX_Script" >> "$LogScriptsDir/$LogFileName"
+                rm "$DumpDir/$Site/$Log_GET_RINEX_Script"
+             endif
+             echo "Ftp section:" >> "$LogScriptsDir/$LogFileName"
+             if ( ! -e $DumpDir/$Site/$Log_PUT_FTP_Script ) then
+                echo "$Log_PUT_FTP_Script not present for $Site site." >> "$LogScriptsDir/$LogFileName"
+             else
+                gawk '{print $0}' "$DumpDir/$Site/$Log_PUT_FTP_Script" >> "$LogScriptsDir/$LogFileName"
+                rm "$DumpDir/$Site/$Log_PUT_FTP_Script"
+             endif
+             echo "" >> "$LogScriptsDir/$LogFileName"
+             echo "" >> "$LogScriptsDir/$LogFileName"
+          end
+          goto end_of_main_loop
+
+          download_data:
+          sleep "$SleepSafeTime_sec" # permette al ricevitore di chiudere completamente una connessione precedente
+          # se il file di log del data file � su disco vai avanti e controlla che ci sia l'indice corretto altrimenti
+          # crea l'indice di file con valore 1
+
+          if ( -e $DumpDir/$Site/$DtaLogFileName ) then
+             # se il numero d'indice � presente nel file recuperalo e incrementalo di 1 altrimenti crea un indice
+             # con valore 1
+             if (`gawk '$1 ~"Attempt:" {print $2}' "$DumpDir/$Site/$DtaLogFileName"` != "") then
+                set DtaCounter = `gawk '$1 ~"Attempt:" {print $2}' "$DumpDir/$Site/$DtaLogFileName" | gawk '{ if ($1 > max) max = $1 } END {print max}'`
+                set DtaCounter = `expr $DtaCounter + 1`
+             else
+                set DtaCounter = 1
+             endif
+          else
+             set DtaCounter = 1
+          endif
+          # se lo script � in modalit� Transparent Mode eliminare al primo passo il sito dalla lista. Arrivati in questo
+          # punto dello script � evidente che il file raw non � presente sul disco.
+          if (($TPMode == "Yes") && ($DtaCounter == 1)) then
+             set ActualSitesList = `echo "$ActualSitesList" | gawk '{for (i = 1; i <= NF; i++) if ($i == "'"$Site"'") {$i = ""; print $0}}'`
+             echo "Transparent Mode --> File $FileType$Site$SessionType$Year.$DOY inexistent" >> "$DumpDir/$Site/$DtaLogFileName"
+             goto top
+          endif
+          # se il numero di volte che si � provato a scaricare un file di dat � maggiore di 3 esci ed elimina il sito
+          # dalla lista dei siti aggiungendo il commento "fail" al file di log del file dati, altrimenti vai avanti
+          # e tenta di scaricare il file attivando il TimeChecker sulla fase di download
+          if ($DtaCounter >= $DtaCounts) then
+             echo "Number of attempts exceeded, File $FileType$Site$SessionType$Year.$DOY not downloaded" >> "$DumpDir/$Site/$DtaLogFileName"
+             set ActualSitesList = `echo "$ActualSitesList" | gawk '{for (i = 1; i <= NF; i++) if ($i == "'"$Site"'") {$i = ""; print $0}}'`
+             goto top
+          else
+             # usa lo scheletro del file di configurazione di sharc per creare il file di configurazione per
+             # il download del data file con indice $IndexNumber
+             cp "$DumpDir/$Site/$Cfg_Dump_Program_Skel" "$DumpDir/$Site/$Cfg_Dump_Program"
+	     if ( ! -e $DumpDir/$Site/$DataType ) then
+	        mkdir -p $DumpDir/$Site/$DataType
+	     endif
+	     echo "datadir $DumpDir/$Site/$DataType" >> "$DumpDir/$Site/$Cfg_Dump_Program"
+	     if ($UseFat == "Yes") then
+                echo "download $IndexNumber" >> "$DumpDir/$Site/$Cfg_Dump_Program"
+	     else
+                # N.B.la riga seguente serve solo per impostare correttamente l'ora di download
+                # nel file di configurazione di sharc
+                @ HOUR_TIME = $HOUR - 1
+		#@ HOUR_TIME = $HOUR
+                # Session_Time � necessario per eliminare un bug di sharc relativo alla confusione
+                # che si crea ogni volta che c'� un'interruzione dei file orari o un passaggio
+                # da acquisizione giornaliera a quella oraria.
+                set Session_Time = `echo $HOUR | hr2ses`
+                #PF echo $Session_Time
+                # echo "download $YearLong/0/$DOY":"$HOUR_TIME-$YearLong/0/$DOY":"$HOUR_TIME $Session_Time"
+                set DownloadString = `echo "$YearLong/0/$DOY":"$HOUR_TIME-$YearLong/0/$DOY":"$HOUR_TIME $Session_Time"`
+	        #echo ""download $YearLong/0/$DOY":"$HOUR_TIME-$YearLong/0/$DOY":"$HOUR_TIME $Session_Time"" >> "$DumpDir/$Site/$Cfg_Dump_Program"
+                echo $DownloadString | gawk '{printf "download \"%s\"\n", $0}' >> "$DumpDir/$Site/$Cfg_Dump_Program"
+	        #PF cat "$DumpDir/$Site/$Cfg_Dump_Program"
+                #exit 1
+	     endif
+             # Avvia TimeChecker per controllare che sharc non rimanga attivo per troppo tempo dopo l'avvio
+             # del download del file di dati
+             TimeChecker -a $Dump_Program -t "$DtaSafeTime_sec" >> /dev/null & 
+	    # Avvia sharc e quando il suo compito � finito scrivi il tempo utilizzato dallo stesso su di un file
+             # tempraneo (fat.time)
+             time -f "%E" --output="$DumpDir/$Site/$DtaTimeFileName" $Dump_Program --configfile $DumpDir/$Site/$Cfg_Dump_Program
+             # se TimeChecker � ancora attivo uccidi lui e tutti i processi che ha generato
+             set PidNum = `ps -ef | gawk '$9 ~"TimeChecker" || $8 ~"TimeChecker" {print $2}'`
+             if ("$PidNum" != "") then
+                set KillingList = `ps -ef | gawk '$3=="'"$PidNum"'" {print $2}'`
+                set KillingList = "$PidNum $KillingList"
+                foreach ToKill ($KillingList)
+          	   # echo "Before ToKill"
+          	   if (`ps -ef | gawk '$2 == "'"$ToKill"'" {print $2}'` != "") then
+                      kill "$ToKill"
+          	   else
+          	   endif
+                end
+          	set DtaTime = `gawk '{print $0}' "$DumpDir/$Site/$DtaTimeFileName"`
+             else
+                set DtaTime = "$DtaSafeTime"
+                echo "$DtaSafeTime" > "$DumpDir/$Site/$DtaTimeFileName"
+             endif
+             set DtaCommandResult = `gawk '$0 !~":" {print $0}' "$DumpDir/$Site/$DtaTimeFileName"`
+             set DtaTime = `gawk '$0 ~":" {print $0}' "$DumpDir/$Site/$DtaTimeFileName"`
+             set DtaTime_hour = `echo "$DtaTime" | gawk 'BEGIN{FS=":"} ; {if (NF ==3) print $1; else print 0}'`
+             set DtaTime_min = `echo "$DtaTime" | gawk 'BEGIN{FS=":"} ; {print $(NF-1)}'`
+             set DtaTime_sec = `echo "$DtaTime" | gawk 'BEGIN{FS=":"} ; {print $NF}'`
+             set DtaTime_Tot = `echo "3600 * $DtaTime_hour + 60 * $DtaTime_min + $DtaTime_sec" | bc -l`
+             # se il file giornaliero � su disco aggiungi "Attempt: [n] Download_time: [hours:minutes:seconds]
+             # Download_result: Ok" e sulla riga successiva File [filename] on disk, size: [xxMb] al file di log
+             # del data file e rimuovi il sito dalla lista dei siti altrimenti aggiungi Attempt: [n]
+             # Download_time: [hours:minutes:seconds] Download_result: Fail e metti il sito in coda alla lista dei siti"
+             if (-e $DumpDir/$Site/$DataType/$FileType$Site$SessionType$Year.$DOY) then
+		set DtaSize = `ls "$DumpDir/$Site/$DataType/$FileType$Site$SessionType$Year.$DOY" -lh | gawk '{print $5; print "Bytes"}'`
+                echo "Attempt : $DtaCounter Download_time: $DtaTime Download_result: Ok. $DtaCommandResult" >> "$DumpDir/$Site/$DtaLogFileName"
+                echo "File $FileType$Site$SessionType$Year.$DOY on disk, size: $DtaSize" >> "$DumpDir/$Site/$DtaLogFileName"
+
+                # Sessione di controllo e di conversione dei file Rinex
+         	$GET_RINEX_Script $Site $DOY $HOURONDISK $YearLong $Unpub > $DumpDir/$Site/$Log_GET_RINEX_Script
+          	# sessione FTP
+          	# lcsite � necessario perch� i file compressi hanno tutti nomi con lettere minsucole
+          	# prima di processare la routine di FTP si fa un controllo per vedere se il sito in questione � nella
+          	# lista di quelli abilitati ($FTP_List)all'upload dei data
+          	if ($FTPOk == "Yes") then
+          	   if (-e $DumpDir/$Site/$Cfg_PUT_FTP_Script) then
+                      set NumRec = `cat $DumpDir/$Site/$Cfg_PUT_FTP_Script | awk ' ! /#/ {print $0}' | gawk 'END{print NR}'`
+                      set Rec = 1
+                      while ($Rec <= $NumRec)
+                            set RECORD=`cat $DumpDir/$Site/$Cfg_PUT_FTP_Script | awk ' ! /#/ {print $0}' | gawk '{if (NR == "'$Rec'") print $0}'`
+          		    set REMOTE_MACHINE  = `echo $RECORD[1]` >& /dev/null
+                            set REMOTE_USER = `echo $RECORD[2]` >& /dev/null
+                            set REMOTE_PASSWORD = `echo $RECORD[3]` >& /dev/null
+                            set REMOTE_DIR = `echo $RECORD[4]` >& /dev/null
+          		    if ($#RECORD == 5) then
+          		       set FILE_TYPE = `echo $RECORD[5]` >& /dev/null
+          		    endif
+          		    @ Rec++
+          		    if ($#RECORD == 5) then
+          		       set lcsite = `echo $Site | tr 'A-Z' 'a-z'` # SITE -> site
+			       set FtpFileList = `ls $RinexDir/$YearLong/$DOY/$HOURONDISK/$Site*.crx.gz | gawk ' { print $0}'`
+          		       if ( "$FtpFileList" != "") then
+			       #2024.03if (-e $RinexDir/$YearLong/$DOY/$HOURONDISK/$lcsite${DOY}$lses.${Year}d.Z | -e $RinexDir/$YearLong/$DOY/$HOURONDISK/$lcsite${DOY}$lses.${Year}o.Z) then
+                                  #2024.03set FtpFileList = `ls $RinexDir/$YearLong/$DOY/$HOURONDISK/$lcsite${DOY}$lses.${Year}?.Z | gawk 'BEGIN{FS="."} {if (match("'"$FILE_TYPE"'",substr($2,3,1))) print $0}'`
+          			  set FtpFileList = `ls $RinexDir/$YearLong/$DOY/$HOURONDISK/$Site*.crx.gz | gawk ' { print $0}'`
+				  echo "- Uploads to $REMOTE_MACHINE for user $REMOTE_USER" >> "$DumpDir/$Site/$Log_PUT_FTP_Script"
+          			  $PUT_FTP_Script -m "$REMOTE_MACHINE" -u $REMOTE_USER -p $REMOTE_PASSWORD -rd $REMOTE_DIR -f $FtpFileList >> "$DumpDir/$Site/$Log_PUT_FTP_Script"
+                               else
+          		          echo "$RinexDir/$YearLong/$DOY/$HOURONDISK/$lcsite${DOY}$lses.${Year}d.Z not on disk, impossible to upload the file to the $REMOTE_MACHINE machine" >> "$DumpDir/$Site/$Log_PUT_FTP_Script"
+          	               endif
+          		    else
+          		       echo "- No uploading needed to $REMOTE_MACHINE for user $REMOTE_USER according the config file $DumpDir/$Site/$Cfg_PUT_FTP_Script for $Site site" >> "$DumpDir/$Site/$Log_PUT_FTP_Script"
+          		    endif
+          	      end
+          	   else
+          	      echo "No $DumpDir/$Site/$Cfg_PUT_FTP_Script on disk. No data uploaded for $Site site" >> "$DumpDir/$Site/$Log_PUT_FTP_Script"
+          	   endif
+                endif
+		if ("$Brand" == "U" ) then
+                   set ActualSitesList = `echo "$ActualSitesList" | gawk '{for (i = 1; i <= NF; i++) if ($i == "'"$Site"'") {$i = ""; print $0}}'`
+		endif
+             else
+                echo "Attempt: $DtaCounter Download_time $DtaTime Download_result: Fail. $DtaCommandResult" >> "$DumpDir/$Site/$DtaLogFileName"
+                # Rimosso da DZ e PF il 2015.04.21 in quanto su diversi ricevitori erano registrati dei file intrasessione oraria
+		#$Reset_Script -s $Site >> "$DumpDir/$Site/$DtaLogFileName" # resetta la stazione che non ha permesso il download
+          	set ActualSitesList = `echo "$ActualSitesList" | gawk '{for (i = 1; i <= NF; i++) if ($i == "'"$Site"'") {$i = ""; print $0}}'`" $Site"
+             endif
+          endif
+          goto top
+
+          download_fat:
+          sleep "$SleepSafeTime_sec" # permette al ricevitore di chiudere completamente una connessione precedente
+          # se il file di log della fat � su disco vai avanti e controlla che ci sia l'indice corretto altrimenti
+          # crea il file di log per la fat con l'indice di file pari a 1
+          if (-e $DumpDir/$Site/$FatLogFileName) then
+             # se il numero di contatore � presente nel file recuperalo e incrementalo di 1 altrimenti crea un contatore
+             # con valore 1
+             if (`gawk '$1 ~"Attempt:" {print $2}' "$DumpDir/$Site/$FatLogFileName"` != "") then
+                set FatCounter = `gawk '$1 ~"Attempt:" {print $2}' "$DumpDir/$Site/$FatLogFileName" | gawk '{ if ($1 > max) max = $1 } END {print max}'`
+                set FatCounter = `expr $FatCounter + 1`
+             else
+                set FatCounter = 1
+             endif
+          else
+             set FatCounter = 1
+          endif
+          # se lo script � in modalit� Transparent Mode eliminare al primo passo il sito dalla lista
+          if (($TPMode == "Yes") && ($FatCounter == 1)) then
+             set ActualSitesList = `echo "$ActualSitesList" | gawk '{for (i = 1; i <= NF; i++) if ($i == "'"$Site"'") {$i = ""; print $0}}'`
+             echo "Transparent Mode --> File $FileType$Site$SessionType$Year.$DOY inexistent" >> "$DumpDir/$Site/$FatLogFileName"
+             goto top
+          endif
+          # echo "il counter vale: $FatCounter"
+          # se il numero di volte che si � provato a scaricare un file di fat � maggiore di 3 esci ed elimina il sito
+          # dalla lista dei siti aggiungendo il commento "fail" al file di log del file della fat, altrimenti vai avanti
+          # e tenta di scaricare il file di fat attivando il TimeChecker sulla fase di download
+          if ($FatCounter >= $FatCounts) then
+             #se la fat � su disco vai avanti altrimenti aggiungi il commento "Empty $FatFileName, $FatFileName size: $FatSize"
+             #al file di log della fat
+             if ( -e $DumpDir/$Site/$FatFileName ) then
+                # se la fat non � vuota aggiungi il commento "Number of attempts exceeded,  $FatFileName file not downloaded for $Site site"
+                # al file di log della fat altrimenti vai avanti
+                if (`gawk '$0 ~"'"$Site"'" {print $0}' "$DumpDir/$Site/$FatFileName"` != "") then
+                   echo "Number of attempts exceeded,  $FatFileName file not downloaded for $Site site" >> "$DumpDir/$Site/$FatLogFileName"
+                else
+                   echo "Number of attempts exceeded,  $FatFileName file empty, GPS receiver likely is freezed" >> "$DumpDir/$Site/$FatLogFileName"
+                endif
+             else
+                echo "Number of attempts exceeded,  $FatFileName file empty, GPS receiver likely is freezed" >> "$DumpDir/$Site/$FatLogFileName"
+             endif
+             echo "File $FileType$Site$SessionType$Year.$DOY impossible to download from receiver" >> "$DumpDir/$Site/$DtaLogFileName"
+             set ActualSitesList = `echo "$ActualSitesList" | gawk '{for (i = 1; i <= NF; i++) if ($i == "'"$Site"'") {$i = ""; print $0}}'`
+             goto top
+          else
+             # usa lo scheletro del file di configurazione di sharc per creare il file di configurazione per
+             # il download della fat
+             cp "$DumpDir/$Site/$Cfg_Dump_Program_Skel" "$DumpDir/$Site/$Cfg_Dump_Program"
+             echo "fatfile $DumpDir/$Site/$FatFileName" >> "$DumpDir/$Site/$Cfg_Dump_Program"
+	     #PFcat $DumpDir/$Site/$Cfg_Dump_Program
+             # Avvia TimeChecker per controllare che sharc non rimanga attivo per troppo tempo dopo l'avvio
+             # del download della fat
+             echo "Avvio di TimeChecker"
+             TimeChecker -a $Dump_Program -t "$FatSafeTime_sec" >> /dev/null &
+             time -f "%E" --output="$DumpDir/$Site/$FatTimeFileName" $Dump_Program --configfile $DumpDir/$Site/$Cfg_Dump_Program
+             set PidNum = `ps -ef | gawk '$9 ~"TimeChecker" || $8 ~"TimeChecker" {print $2}'`
+             # se TimeChecker � ancora attivo uccidi lui e tutti i processi che ha generato
+             if ("$PidNum" != "") then
+                echo "TimeChecker attivo per il sito $Site"
+                set KillingList = `ps -ef | gawk '$3=="'"$PidNum"'" {print $2}'`
+                set KillingList = "$PidNum $KillingList"
+                set KillingList = "$PidNum"
+                foreach ToKill ($KillingList)
+          	   if (`ps -ef | gawk '$2 == "'"$ToKill"'" {print $2}'` != "") then
+                      kill "$ToKill"
+          	   else
+          	   endif
+                end
+          	set FatTime = `gawk '{print $0}' "$DumpDir/$Site/$FatTimeFileName"`
+             else
+                set FatTime = "$FatSafeTime"
+                echo "$FatSafeTime" > "$DumpDir/$Site/$FatTimeFileName"
+             endif
+             # Recupera dal file fat.time tutte le info relative al tempo di funzionamento di sharc durante il
+             # download della fat
+             set FatCommandResult = `gawk '$0 !~":" {print $0}' "$DumpDir/$Site/$FatTimeFileName"`
+             set FatTime = `gawk '$0 ~":" {print $0}' "$DumpDir/$Site/$FatTimeFileName"`
+             set FatTime_hour = `echo "$FatTime" | gawk 'BEGIN{FS=":"} ; {if (NF ==3) print $1; else print 0}'`
+             set FatTime_min = `echo "$FatTime" | gawk 'BEGIN{FS=":"} ; {print $(NF-1)}'`
+             set FatTime_sec = `echo "$FatTime" | gawk 'BEGIN{FS=":"} ; {print $NF}'`
+             set FatTime_Tot = `echo "3600 * $FatTime_hour + 60 * $FatTime_min + $FatTime_sec" | bc -l`
+             # se la fat � su disco aggiungi:
+             # "Attempt: [n] Download_time: [hours:minutes:seconds] Download_result: Ok"
+             # ed anche l'info relativa alla  dimensione del file di fat al file di log della fat
+             # altrimenti aggiungi:
+             # Attempt: [n]  Download_time: [hours:minutes:seconds] Download_result: Fail"
+             # e metti in coda alla lista dei siti il sito attuale
+             if ( -e $DumpDir/$Site/$FatFileName ) then
+                set FatSize = `ls "$DumpDir/$Site/$FatFileName" -lh | gawk '{print $5; print "Bytes"}'`
+          	#se la fat non � vuota fai quello che � stato detto al commento precedente
+          	#altrimenti, se il file site.fat � vuoto, aggiungi il commento Download_result: empty fat for ... site
+          	#al file di log della fat, copia site.fat file site.fat.old e metti in coda alla lista dei siti il sito attuale
+          	if (`gawk '$0 ~"'"$Site"'" {print $0}' "$DumpDir/$Site/$FatFileName"` != "") then
+                   echo "Attempt: $FatCounter Download_time: $FatTime Download_result: Ok. $FatCommandResult" >> "$DumpDir/$Site/$FatLogFileName"
+                   echo "$FatFileName size: $FatSize" >> "$DumpDir/$Site/$FatLogFileName"
+          	else
+          	   echo "Attempt: $FatCounter Download_time: $FatTime Download_result: empty fat for $Site site, $FatCommandResult" >> "$DumpDir/$Site/$FatLogFileName"
+          	   set ActualSitesList = `echo "$ActualSitesList" | gawk '{for (i = 1; i <= NF; i++) if ($i == "'"$Site"'") {$i = ""; print $0}}'`" $Site"
+          	endif
+             else
+                echo "Attempt: $FatCounter Download_time: $FatTime Download_result: Fail. $FatCommandResult" >> "$DumpDir/$Site/$FatLogFileName"
+                # Rimosso da DZ e PF il 2015.04.21 in quanto su diversi ricevitori erano registrati dei file intrasessione oraria
+		#$Reset_Script -s $Site  >> "$DumpDir/$Site/$FatLogFileName" # resetta la stazione che non ha permesso il download
+          	set ActualSitesList = `echo "$ActualSitesList" | gawk '{for (i = 1; i <= NF; i++) if ($i == "'"$Site"'") {$i = ""; print $0}}'`" $Site"
+             endif
+          endif
+          goto top
+          # while sull'anno + foreach sul giorno
+          end_of_main_loop:
+      end
+   end
+end
+# controllo con gawk sul file di log delle parole chiave:
+# incorrect, refused per l'ftp
+# exist, fail, skipped, incomplete, exited, per tutti gli script
+# terminated per un errore di sharc
+#set SendMail = "Yes"
+set SendMail = (`cat "$LogScriptsDir/$LogFileName" | gawk '/incorrect/ || /refused/ || /skipped/ || /exist/ || /Fail/ || /fail/ || /incomplete/ || /exited/  || /terminated/ {print "Yes"}'`)
+if ( "$ActualMailsList" != "") then
+   if ( "$SendMail" != "") then
+      if ( "$SendMail[1]" == "Yes") then
+         cat "$LogScriptsDir/$LogFileName" | mailx -s "$DataType downloading status" "$ActualMailsList"
+      endif
+   endif
+else
+   cat "$LogScriptsDir/$LogFileName"
+endif
+end_of_script:
